@@ -144,6 +144,83 @@ describe('bin/claude', () => {
     expect(readFakeLog(claudeLog)).toEqual([])
   })
 
+  describe('instructions and permission mode', () => {
+    it('appends the instructions file and passes the permission mode inside a workspace', async () => {
+      const instructions = join(home, 'instructions', 'delegation.md')
+      fs.mkdirSync(dirname(instructions), { recursive: true })
+      fs.writeFileSync(instructions, 'Delegate searches to a smaller model.\n')
+
+      const r = await runWrapper(['--resume', 'sess_8c1d2e'], {
+        QUE_WORKSPACE_ID: WORKSPACE_ID,
+        QUE_INSTRUCTIONS: instructions,
+        QUE_PERMISSION_MODE: 'acceptEdits'
+      })
+
+      expect(r.code).toBe(0)
+      expect(readFakeLog(claudeLog).map((c) => c.argv)).toEqual([
+        [
+          '--settings',
+          paths.hooksJson,
+          '--append-system-prompt-file',
+          instructions,
+          '--permission-mode',
+          'acceptEdits',
+          '--resume',
+          'sess_8c1d2e'
+        ]
+      ])
+    })
+
+    it('leaves out an instructions file that does not exist yet', async () => {
+      const r = await runWrapper(['--version'], {
+        QUE_WORKSPACE_ID: WORKSPACE_ID,
+        QUE_INSTRUCTIONS: join(home, 'missing', 'instructions.md')
+      })
+
+      expect(r.code).toBe(0)
+      expect(readFakeLog(claudeLog).map((c) => c.argv)).toEqual([
+        ['--settings', paths.hooksJson, '--version']
+      ])
+    })
+
+    it("keeps the user's own --permission-mode instead of adding a second one", async () => {
+      const r = await runWrapper(['--permission-mode', 'plan', '--version'], {
+        QUE_WORKSPACE_ID: WORKSPACE_ID,
+        QUE_PERMISSION_MODE: 'acceptEdits'
+      })
+
+      expect(r.code).toBe(0)
+      expect(readFakeLog(claudeLog).map((c) => c.argv)).toEqual([
+        ['--settings', paths.hooksJson, '--permission-mode', 'plan', '--version']
+      ])
+    })
+
+    it('keeps --dangerously-skip-permissions without adding a permission mode', async () => {
+      const r = await runWrapper(['--dangerously-skip-permissions', '--version'], {
+        QUE_WORKSPACE_ID: WORKSPACE_ID,
+        QUE_PERMISSION_MODE: 'acceptEdits'
+      })
+
+      expect(r.code).toBe(0)
+      expect(readFakeLog(claudeLog).map((c) => c.argv)).toEqual([
+        ['--settings', paths.hooksJson, '--dangerously-skip-permissions', '--version']
+      ])
+    })
+
+    it('adds neither outside a workspace', async () => {
+      const instructions = join(home, 'instructions.md')
+      fs.writeFileSync(instructions, 'Delegate searches to a smaller model.\n')
+
+      const r = await runWrapper(['--version'], {
+        QUE_INSTRUCTIONS: instructions,
+        QUE_PERMISSION_MODE: 'acceptEdits'
+      })
+
+      expect(r.code).toBe(0)
+      expect(readFakeLog(claudeLog).map((c) => c.argv)).toEqual([['--version']])
+    })
+  })
+
   it('reports a missing claude', async () => {
     const r = await runWrapper(['--version'], {
       PATH: [paths.binDir, NODE_DIR, '/usr/bin', '/bin'].join(':')

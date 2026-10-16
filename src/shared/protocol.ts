@@ -371,6 +371,19 @@ export interface ConfigSetParams {
   applyTonight?: boolean
 }
 
+/** The instructions file (instructions_file) appended to every session's system prompt. */
+export interface InstructionsGetResult {
+  /** The configured path, absolute; absent when instructions_file is unset. */
+  path?: string
+  exists: boolean
+  /** The file's text; '' when it does not exist. */
+  content: string
+}
+
+export interface InstructionsSetParams {
+  content: string
+}
+
 /** Maps each method name to its params and result types. */
 export interface Methods {
   'daemon.ping': { params: Record<string, never> | undefined; result: PingResult }
@@ -420,6 +433,9 @@ export interface Methods {
   'quiet.log': { params: QuietLogParams | undefined; result: QuietUnlock[] }
   'config.get': { params: Record<string, never> | undefined; result: ConfigGetResult }
   'config.set': { params: ConfigSetParams; result: ConfigGetResult }
+  'instructions.get': { params: Record<string, never> | undefined; result: InstructionsGetResult }
+  /** Writes the instructions file; `not_configured` when instructions_file is unset. */
+  'instructions.set': { params: InstructionsSetParams; result: InstructionsGetResult }
   'tickets.list': { params: Record<string, never> | undefined; result: TicketsListResult }
   'tickets.sync': { params: Record<string, never> | undefined; result: TicketsListResult }
   'tickets.start': { params: TicketsStartParams; result: TicketsStartResult }
@@ -510,7 +526,9 @@ export const ErrorCodes = {
   NotFound: 'not_found',
   Conflict: 'conflict',
   Internal: 'internal',
-  QuietHours: 'quiet_hours'
+  QuietHours: 'quiet_hours',
+  /** The method needs a config key that is not set (instructions.set without instructions_file). */
+  NotConfigured: 'not_configured'
 } as const
 
 // ---- framing --------------------------------------------------------------

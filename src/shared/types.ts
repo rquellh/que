@@ -276,6 +276,11 @@ export interface UserConfig {
   allowBypassPermissions: boolean
   /** Branches the finisher never pushes, besides each project's default branch. */
   protectedBranches: string[]
+  /**
+   * A file appended to every interactive session's system prompt inside a
+   * workspace (absolute; a leading ~ is expanded). Unset when absent.
+   */
+  instructionsFile?: string
   quietHours: QuietHoursConfig
   notifications: NotificationsConfig
   jira: JiraConfig

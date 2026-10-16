@@ -1,7 +1,9 @@
 // The hooks wrapper. Workspace terminals get <QUE_HOME>/bin first on PATH:
 // its `claude` adds `--settings <QUE_HOME>/hooks.json` when started inside a
-// workspace, and those hooks run `que hook`, which reports to the daemon. The
-// user's own Claude Code settings are never touched.
+// workspace, and those hooks run `que hook`, which reports to the daemon. It
+// also adds the instructions file and the permission mode from the terminal's
+// QUE_INSTRUCTIONS and QUE_PERMISSION_MODE. The user's own Claude Code
+// settings are never touched.
 import fs from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { appExecutable, cliScriptFrom, packagedResourcesDir } from '../shared/packaged'
@@ -107,7 +109,9 @@ const MAX_WRAPPER_DEPTH = 16
 function claudeScript(paths: QuePaths): string {
   return `#!/bin/sh
 # que wrapper for Claude Code. Inside a que workspace terminal it adds que's
-# hook settings for this session only; anywhere else it is transparent. When
+# hook settings for this session only, plus the instructions file
+# (QUE_INSTRUCTIONS) and permission mode (QUE_PERMISSION_MODE) when set;
+# anywhere else it is transparent. When
 # another claude wrapper on PATH hands the command back here (same pid: they
 # exec), the claude already tried is skipped and --settings is not added twice.
 QUE_BIN=${shQuote(paths.binDir)}
@@ -160,6 +164,21 @@ fi
 QUE_CLAUDE_TRIED="\${QUE_CLAUDE_TRIED:+$QUE_CLAUDE_TRIED:}$REAL"
 export QUE_CLAUDE_TRIED
 if [ -n "$QUE_WORKSPACE_ID" ] && [ -z "$REENTERED" ]; then
+  # Your own --permission-mode or --dangerously-skip-permissions (before any
+  # --) wins over que's. Extra flags go in front of yours, last first.
+  OWN_MODE=""
+  for a in "$@"; do
+    case "$a" in
+      --) break ;;
+      --permission-mode|--permission-mode=*|--dangerously-skip-permissions) OWN_MODE=1 ;;
+    esac
+  done
+  if [ -n "\${QUE_PERMISSION_MODE-}" ] && [ -z "$OWN_MODE" ]; then
+    set -- --permission-mode "$QUE_PERMISSION_MODE" "$@"
+  fi
+  if [ -n "\${QUE_INSTRUCTIONS-}" ] && [ -f "$QUE_INSTRUCTIONS" ]; then
+    set -- --append-system-prompt-file "$QUE_INSTRUCTIONS" "$@"
+  fi
   exec "$REAL" --settings "$QUE_HOOKS" "$@"
 fi
 exec "$REAL" "$@"

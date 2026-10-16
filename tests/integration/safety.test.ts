@@ -218,6 +218,8 @@ const QUIET_POLICY: Record<MethodName, 'refused' | 'allowed'> = {
   'quiet.log': 'allowed',
   'config.get': 'allowed',
   'config.set': 'allowed',
+  'instructions.get': 'allowed',
+  'instructions.set': 'allowed',
   'tickets.list': 'allowed',
   'tickets.sync': 'allowed',
   'tickets.projectFor': 'allowed',

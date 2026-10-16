@@ -5,6 +5,7 @@ import { createContext, useContext, useSyncExternalStore } from 'react'
 import type {
   ConfigGetResult,
   ConfigSetParams,
+  InstructionsGetResult,
   PrThread,
   Project,
   QueApi,
@@ -1027,6 +1028,16 @@ export class QueStore {
     const config = await this.api.config.set(p)
     this.set({ config })
     return config
+  }
+
+  /** The instructions file (instructions_file): its path, whether it exists, its text. */
+  loadInstructions(): Promise<InstructionsGetResult> {
+    return this.api.instructions.get()
+  }
+
+  /** Writes the instructions file; rejects with `not_configured` when no path is set. */
+  saveInstructions(content: string): Promise<InstructionsGetResult> {
+    return this.api.instructions.set({ content })
   }
 
   /** Selects a tab (a terminal or a view) within the pane that holds it, and focuses that pane. */

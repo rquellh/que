@@ -282,3 +282,87 @@ describe('SettingsView tickets', () => {
     expect(fakeBridge.configSetCalls()).toEqual([])
   })
 })
+
+describe('SettingsView instructions', () => {
+  it('loads the file the config names into the editor and saves edits through the bridge', async () => {
+    const user = userEvent.setup()
+    fakeBridge.setConfig(
+      { instructionsFile: '/Users/dev/notes/delegation.md' },
+      { instructions_file: '/Users/dev/notes/delegation.md' }
+    )
+    fakeBridge.seedInstructions('Delegate broad searches to a smaller model.\n')
+    await openSettings(user)
+
+    expect(await screen.findByTestId('settings-instructions-file')).toHaveValue(
+      '/Users/dev/notes/delegation.md'
+    )
+    const content = screen.getByTestId('settings-instructions-content')
+    await waitFor(() => {
+      expect(content).toHaveValue('Delegate broad searches to a smaller model.\n')
+    })
+    expect(content).toBeEnabled()
+    expect(screen.queryByTestId('settings-instructions-unset')).not.toBeInTheDocument()
+
+    await user.type(content, 'Run tests before a commit.')
+    await user.click(screen.getByRole('button', { name: 'Save instructions' }))
+
+    expect(await screen.findByTestId('settings-instructions-saved')).toHaveTextContent('Saved')
+    expect(fakeBridge.instructionsSetCalls()).toEqual([
+      'Delegate broad searches to a smaller model.\nRun tests before a commit.'
+    ])
+    expect(fakeBridge.configSetCalls()).toEqual([])
+  })
+
+  it('disables the editor with a hint until a file is set, then saves the path as a config patch', async () => {
+    const user = userEvent.setup()
+    await openSettings(user)
+
+    const content = await screen.findByTestId('settings-instructions-content')
+    expect(content).toBeDisabled()
+    expect(screen.getByTestId('settings-instructions-unset')).toHaveTextContent(
+      'Set a file above and save to edit the instructions here.'
+    )
+    expect(screen.getByRole('button', { name: 'Save instructions' })).toBeDisabled()
+
+    await user.type(screen.getByTestId('settings-instructions-file'), '~/notes/delegation.md')
+    await user.click(screen.getByTestId('settings-save'))
+
+    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
+    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({
+      instructions_file: '~/notes/delegation.md'
+    })
+    await waitFor(() => expect(content).toBeEnabled())
+    expect(screen.queryByTestId('settings-instructions-unset')).not.toBeInTheDocument()
+  })
+
+  it('refuses a relative path, saying why', async () => {
+    const user = userEvent.setup()
+    await openSettings(user)
+
+    await user.type(await screen.findByTestId('settings-instructions-file'), 'notes/delegation.md')
+    await user.click(screen.getByTestId('settings-save'))
+
+    expect(await screen.findByTestId('settings-error')).toHaveTextContent(
+      'The instructions file must be an absolute path or start with ~'
+    )
+    expect(fakeBridge.configSetCalls()).toEqual([])
+  })
+
+  it('removes the key when the path is cleared', async () => {
+    const user = userEvent.setup()
+    fakeBridge.setConfig(
+      { instructionsFile: '/Users/dev/notes/delegation.md' },
+      { instructions_file: '/Users/dev/notes/delegation.md' }
+    )
+    await openSettings(user)
+
+    await user.clear(await screen.findByTestId('settings-instructions-file'))
+    await user.click(screen.getByTestId('settings-save'))
+
+    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
+    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({ instructions_file: null })
+    await waitFor(() => {
+      expect(screen.getByTestId('settings-instructions-content')).toBeDisabled()
+    })
+  })
+})

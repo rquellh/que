@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
-import type { QuietHoursConfig, UserConfig, Weekday } from '../../../preload/index.d'
+import type {
+  InstructionsGetResult,
+  QuietHoursConfig,
+  UserConfig,
+  Weekday
+} from '../../../preload/index.d'
 import { currentWindow } from '../../../daemon/quiet-hours'
 import { WEEKDAYS } from '../../../shared/types'
 import { useQue, useStore } from '../store'
@@ -28,6 +33,7 @@ interface Form {
   site: string
   pollMinutes: string
   startPrompt: string
+  instructionsFile: string
 }
 
 /** Monday first, as people read a week. */
@@ -62,7 +68,8 @@ function toForm(c: UserConfig): Form {
     jql: c.jira.jql,
     site: c.jira.site ?? '',
     pollMinutes: String(c.jira.pollMinutes),
-    startPrompt: c.jira.startPrompt
+    startPrompt: c.jira.startPrompt,
+    instructionsFile: c.instructionsFile ?? ''
   }
 }
 
@@ -86,6 +93,10 @@ function validate(f: Form): string[] {
     errors.push('Sync minutes must be a positive number')
   }
   if (f.startPrompt.trim() === '') errors.push('The start prompt cannot be empty')
+  const file = f.instructionsFile.trim()
+  if (file !== '' && !file.startsWith('/') && !file.startsWith('~')) {
+    errors.push('The instructions file must be an absolute path or start with ~')
+  }
   return errors
 }
 
@@ -132,6 +143,7 @@ function patchOf(f: Form): Record<string, unknown> {
       poll_minutes: Number(f.pollMinutes),
       start_prompt: f.startPrompt
     },
+    instructions_file: f.instructionsFile.trim() === '' ? null : f.instructionsFile.trim(),
     protected_branches: f.protectedBranches
       .split(',')
       .map((b) => b.trim())
@@ -147,10 +159,35 @@ export default function SettingsView(): React.JSX.Element {
   const [errors, setErrors] = useState<string[]>([])
   const [confirming, setConfirming] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [instructions, setInstructions] = useState<InstructionsGetResult | null>(null)
+  const [draft, setDraft] = useState('')
+  const [instructionsSaved, setInstructionsSaved] = useState(false)
+  const [instructionsError, setInstructionsError] = useState<string | null>(null)
+  const instructionsFile = config?.config.instructionsFile
 
   useEffect(() => {
     if (config && form === null) setForm(toForm(config.config))
   }, [config, form])
+
+  // The file's text, read again whenever the configured path changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reload on a new path only
+  useEffect(() => {
+    let live = true
+    store.loadInstructions().then(
+      (r) => {
+        if (!live) return
+        setInstructions(r)
+        setDraft(r.content)
+        setInstructionsError(null)
+      },
+      (err: unknown) => {
+        if (live) setInstructionsError(err instanceof Error ? err.message : String(err))
+      }
+    )
+    return () => {
+      live = false
+    }
+  }, [store, instructionsFile])
 
   if (!form || !config) {
     return (
@@ -175,6 +212,17 @@ export default function SettingsView(): React.JSX.Element {
       setSaved(true)
     } catch (err) {
       setErrors([err instanceof Error ? err.message : String(err)])
+    }
+  }
+
+  const saveInstructions = async (): Promise<void> => {
+    try {
+      const r = await store.saveInstructions(draft)
+      setInstructions(r)
+      setInstructionsError(null)
+      setInstructionsSaved(true)
+    } catch (err) {
+      setInstructionsError(err instanceof Error ? err.message : String(err))
     }
   }
 
@@ -377,6 +425,62 @@ export default function SettingsView(): React.JSX.Element {
                 </div>
               ))
             )}
+          </div>
+        </fieldset>
+        <fieldset data-testid="settings-instructions">
+          <legend>Instructions</legend>
+          <label>
+            File
+            <input
+              data-testid="settings-instructions-file"
+              value={form.instructionsFile}
+              onChange={(e) => update({ instructionsFile: e.target.value })}
+              placeholder="~/.config/que/instructions.md"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <span className="hint">
+              Appended to the system prompt of every session started in a workspace. New sessions
+              pick up edits; a resumed one after it compacts.
+            </span>
+          </label>
+          <label>
+            Content
+            <textarea
+              rows={8}
+              data-testid="settings-instructions-content"
+              value={draft}
+              disabled={!instructions?.path}
+              onChange={(e) => {
+                setDraft(e.target.value)
+                setInstructionsSaved(false)
+              }}
+            />
+          </label>
+          {!instructions?.path && (
+            <p className="hint" data-testid="settings-instructions-unset">
+              Set a file above and save to edit the instructions here.
+            </p>
+          )}
+          {instructionsError && (
+            <p className="form-error" role="alert" data-testid="settings-instructions-error">
+              {instructionsError}
+            </p>
+          )}
+          <div className="actions">
+            {instructionsSaved && (
+              <span className="muted" role="status" data-testid="settings-instructions-saved">
+                Saved
+              </span>
+            )}
+            <button
+              type="button"
+              data-testid="settings-instructions-save"
+              disabled={!connected || !instructions?.path}
+              onClick={() => void saveInstructions()}
+            >
+              Save instructions
+            </button>
           </div>
         </fieldset>
         <fieldset>

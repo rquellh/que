@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import {
   loadRepoConfig,
   type PermissionMode,
+  resolvePermissionMode,
   type RepoConfig,
   type UserConfig
 } from '../shared/config'
@@ -56,25 +57,7 @@ export function buildPrompt(
   return parts.join('\n\n')
 }
 
-/**
- * The permission mode for a run: que.toml, else the user's default, else
- * acceptEdits. bypassPermissions needs both the repo and the user to opt in.
- */
-export function resolvePermissionMode(
-  repo: Pick<RepoConfig, 'permissionMode'>,
-  config: Pick<UserConfig, 'defaultPermissionMode' | 'allowBypassPermissions'>
-): { mode: PermissionMode; warning: string | null } {
-  const wanted = repo.permissionMode ?? config.defaultPermissionMode ?? 'acceptEdits'
-  if (wanted !== 'bypassPermissions') return { mode: wanted, warning: null }
-  if (repo.permissionMode === 'bypassPermissions' && config.allowBypassPermissions) {
-    return { mode: wanted, warning: null }
-  }
-  return {
-    mode: 'acceptEdits',
-    warning:
-      'bypassPermissions needs permission_mode in que.toml and allow_bypass_permissions = true in the que config; running with acceptEdits'
-  }
-}
+export { resolvePermissionMode }
 
 export interface ClaudeArgsOptions {
   prompt: string

@@ -28,6 +28,26 @@ export const PERMISSION_MODES = [
   'auto'
 ] as const satisfies readonly PermissionMode[]
 
+/**
+ * The permission mode for a session: que.toml, else the user's default, else
+ * acceptEdits. bypassPermissions needs both the repo and the user to opt in.
+ */
+export function resolvePermissionMode(
+  repo: { permissionMode?: PermissionMode },
+  config: Pick<UserConfig, 'defaultPermissionMode' | 'allowBypassPermissions'>
+): { mode: PermissionMode; warning: string | null } {
+  const wanted = repo.permissionMode ?? config.defaultPermissionMode ?? 'acceptEdits'
+  if (wanted !== 'bypassPermissions') return { mode: wanted, warning: null }
+  if (repo.permissionMode === 'bypassPermissions' && config.allowBypassPermissions) {
+    return { mode: wanted, warning: null }
+  }
+  return {
+    mode: 'acceptEdits',
+    warning:
+      'bypassPermissions needs permission_mode in que.toml and allow_bypass_permissions = true in the que config; running with acceptEdits'
+  }
+}
+
 export interface ConfigError {
   /** Dotted key path, or '' for a syntax error. */
   key: string
@@ -307,6 +327,14 @@ export function parseConfig(text: string, env: ConfigEnv): ConfigResult<UserConf
   config.allowBypassPermissions =
     optionalBool(t, 'allow_bypass_permissions', errors) ?? config.allowBypassPermissions
   config.protectedBranches = stringList(t, 'protected_branches', errors) ?? config.protectedBranches
+  const instructions = t.instructions_file
+  if (instructions !== undefined) {
+    if (typeof instructions !== 'string') {
+      errors.push({ key: 'instructions_file', message: 'must be a path' })
+    } else if (instructions.trim() !== '') {
+      config.instructionsFile = expandHome(instructions.trim())
+    }
+  }
   config.quietHours = parseQuietHours(t.quiet_hours, errors)
   config.notifications = parseNotifications(t.notifications, errors)
   config.jira = parseJira(t.jira, errors)

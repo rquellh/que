@@ -9,6 +9,7 @@ import {
   loadConfig,
   loadRepoConfig,
   type RepoConfig,
+  resolvePermissionMode,
   type UserConfig
 } from '../shared/config'
 import type { QuePaths } from '../shared/paths'
@@ -369,13 +370,33 @@ function copyIncludes(from: string, to: string, entries: string[], log: (m: stri
   }
 }
 
+/**
+ * What the claude wrapper adds to a session: QUE_INSTRUCTIONS (the configured
+ * instructions file, whether or not it exists yet) and QUE_PERMISSION_MODE
+ * (que.toml's permission_mode, else default_permission_mode, gated like a
+ * task's; omitted when neither is set).
+ */
+export function sessionEnv(
+  config: Pick<UserConfig, 'instructionsFile' | 'defaultPermissionMode' | 'allowBypassPermissions'>,
+  repo: Pick<RepoConfig, 'permissionMode'>
+): Record<string, string> {
+  const env: Record<string, string> = {}
+  if (config.instructionsFile) env.QUE_INSTRUCTIONS = config.instructionsFile
+  if (repo.permissionMode || config.defaultPermissionMode) {
+    env.QUE_PERMISSION_MODE = resolvePermissionMode(repo, config).mode
+  }
+  return env
+}
+
 /** Extra environment for a workspace terminal: hooks wrapper first on PATH. */
 export function workspaceTerminalEnv(
   ws: Workspace,
   paths: QuePaths,
-  socket: string
+  socket: string,
+  session: Record<string, string> = {}
 ): Record<string, string> {
   const env: Record<string, string> = {
+    ...session,
     QUE_WORKSPACE_ID: ws.id,
     QUE_SOCKET: socket,
     QUE_HOME: paths.home,

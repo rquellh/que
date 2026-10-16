@@ -16,6 +16,7 @@ import {
   defaultConfig,
   formatConfigErrors,
   loadConfig,
+  loadRepoConfig,
   mergeConfigPatch,
   parseConfig,
   readRawConfig,
@@ -26,10 +27,11 @@ import { ensureDirs, quePaths, type QuePaths } from '../shared/paths'
 import type {
   ConfigGetResult,
   HookEvent,
+  InstructionsGetResult,
   TaskAddParams,
   TermCreateParams
 } from '../shared/protocol'
-import type { TaskSource, TaskState } from '../shared/types'
+import type { TaskSource, TaskState, Workspace } from '../shared/types'
 import { conflict, RpcError } from './errors'
 import { finishTask, isProtectedBranch } from './finisher'
 import type { HostedTerminal, PtyHost, TermExtra } from './pty-host'
@@ -42,7 +44,7 @@ import { TicketService } from './tickets'
 import { Store } from './store'
 import { workspaceDiff } from './diff'
 import { readWorkspaceFile, workspaceFiles } from './files'
-import { WorkspaceManager, workspaceTerminalEnv } from './workspaces'
+import { sessionEnv, WorkspaceManager, workspaceTerminalEnv } from './workspaces'
 import { WorktreeWatcher } from './watcher'
 import { defaultCliScript, installWrapper, resolveCliRunner } from './wrapper'
 
@@ -194,7 +196,7 @@ export class DaemonServer {
         const ws = this.workspaces.get(workspaceId)
         const t = this.createTerminal(
           { cwd: ws.path, cols: 120, rows: 30, name: ws.name },
-          { workspaceId: ws.id, env: workspaceTerminalEnv(ws, this.paths, this.socketPath) }
+          { workspaceId: ws.id, env: this.terminalEnv(ws) }
         )
         return { id: t.id }
       },
@@ -324,6 +326,46 @@ export class DaemonServer {
     this.syncWatches()
     this.broadcast('term.killed', { id })
     return true
+  }
+
+  /**
+   * A workspace terminal's environment, with the instructions file and the
+   * permission mode from the current config and the project's que.toml.
+   */
+  private terminalEnv(ws: Workspace): Record<string, string> {
+    const repo = loadRepoConfig(this.workspaces.project(ws.projectId).path)
+    if (!repo.ok) this.log(`que.toml for ${ws.name} is invalid: ${formatConfigErrors(repo.errors)}`)
+    const session = sessionEnv(this.configOrDefault(), repo.ok ? repo.config : {})
+    return workspaceTerminalEnv(ws, this.paths, this.socketPath, session)
+  }
+
+  private getInstructions(): InstructionsGetResult {
+    const path = this.configOrDefault().instructionsFile
+    if (!path) return { exists: false, content: '' }
+    try {
+      return { path, exists: true, content: fs.readFileSync(path, 'utf8') }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { path, exists: false, content: '' }
+      }
+      throw new RpcError(ErrorCodes.BadRequest, `${path}: ${(err as Error).message}`)
+    }
+  }
+
+  private setInstructions(content: string): InstructionsGetResult {
+    const path = this.configOrDefault().instructionsFile
+    if (!path) {
+      throw new RpcError(
+        ErrorCodes.NotConfigured,
+        'no instructions file: set instructions_file in the que config first'
+      )
+    }
+    fs.mkdirSync(dirname(path), { recursive: true })
+    const tmp = `${path}.${process.pid}.tmp`
+    fs.writeFileSync(tmp, content)
+    fs.renameSync(tmp, path)
+    this.log(`instructions ${path} updated`)
+    return this.getInstructions()
   }
 
   /** Kills every terminal of a workspace; returns how many were still alive. */
@@ -642,7 +684,7 @@ export class DaemonServer {
         const ws = this.workspaces.get(str(p, 'id'))
         const t = this.createTerminal(
           { cwd: ws.path, cols: num(p, 'cols'), rows: num(p, 'rows'), name: ws.name },
-          { workspaceId: ws.id, env: workspaceTerminalEnv(ws, this.paths, this.socketPath) }
+          { workspaceId: ws.id, env: this.terminalEnv(ws) }
         )
         return { id: t.id }
       }
@@ -736,6 +778,10 @@ export class DaemonServer {
         return this.getConfig()
       case 'config.set':
         return this.setConfig(p.patch, optBool(p, 'applyTonight') === true)
+      case 'instructions.get':
+        return this.getInstructions()
+      case 'instructions.set':
+        return this.setInstructions(str(p, 'content'))
       default:
         throw new RpcError(ErrorCodes.UnknownMethod, `unknown method ${method}`)
     }

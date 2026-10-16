@@ -103,6 +103,7 @@ export function registerQuietCommands(program: Command): void {
         console.log(`max turns       ${cfg.maxTurns}`)
         console.log(`max budget      $${cfg.maxBudgetUsd}`)
         console.log(`protected       ${cfg.protectedBranches.join(', ')}`)
+        console.log(`instructions    ${cfg.instructionsFile ?? 'none'}`)
       })
     )
   config

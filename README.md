@@ -93,6 +93,7 @@ max_budget_usd = 5
 # default_permission_mode = "acceptEdits"   # unset: que.toml or Claude Code decides
 allow_bypass_permissions = false
 protected_branches = ["main", "master", "release"]
+# instructions_file = "~/.config/que/instructions.md"   # unset: no instructions
 
 [quiet_hours]
 enabled = true

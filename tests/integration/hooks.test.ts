@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DaemonClient } from '@shared/client'
 import type { Events } from '@shared/protocol'
 import type { Workspace } from '@shared/types'
-import { runCliWith } from '../../src/testing/cli'
+import { runCli, runCliWith } from '../../src/testing/cli'
 import { FAKE_WRAPPERS, FAKES_BIN, readFakeLog, readWrapperLog } from '../../src/testing/fakes'
 import {
   startTestDaemon,
@@ -115,6 +115,41 @@ describe('hook delivery', () => {
     expect(claudeCalls).toHaveLength(1)
     expect(claudeCalls[0].argv.filter((a) => a === '--settings')).toEqual(['--settings'])
     expect(readWrapperLog(d.wrapperLog)).toHaveLength(1)
+  }, 45_000)
+
+  it('starts claude with the instructions file and the permission mode set after the daemon started', async () => {
+    // The user default is plan; the repo's que.toml says acceptEdits, which wins.
+    const d = await startTestDaemon({ config: 'default_permission_mode = "plan"\n' })
+    daemon = d
+    const project = await d.client.request('project.add', {
+      path: makeTempRepo(d.home, { queToml: 'setup = "true"\npermission_mode = "acceptEdits"\n' })
+    })
+    const ws = await d.client.request('workspace.create', {
+      projectId: project.id,
+      name: 'app-1488-delegation-rules'
+    })
+    const instructions = join(d.home, 'instructions', 'delegation.md')
+    fs.mkdirSync(join(d.home, 'instructions'))
+    fs.writeFileSync(instructions, 'Delegate broad searches to a smaller model.\n')
+    const set = await runCli('config', 'set', `instructions_file=${instructions}`)
+    expect(set).toMatchObject({ code: 0, stdout: `updated ${d.configPath}\n` })
+
+    const { id } = await d.client.request('workspace.openTerminal', {
+      id: ws.id,
+      cols: 100,
+      rows: 30
+    })
+    await d.client.request('term.write', { id, data: 'claude\r' })
+
+    await expect.poll(() => readFakeLog(d.claudeLog).length, { timeout: 20_000 }).toBe(1)
+    expect(readFakeLog(d.claudeLog)[0].argv).toEqual([
+      '--settings',
+      join(d.home, 'hooks.json'),
+      '--append-system-prompt-file',
+      instructions,
+      '--permission-mode',
+      'acceptEdits'
+    ])
   }, 45_000)
 
   it('accepts hook JSON from `que hook` on stdin, printing nothing', async () => {

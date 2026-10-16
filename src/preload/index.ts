@@ -50,6 +50,10 @@ const api: QueApi = {
     set: (p) => call('config.set', p),
     on: (event, cb) => subscribe(event, cb as (data: unknown) => void)
   },
+  instructions: {
+    get: () => call('instructions.get'),
+    set: (p) => call('instructions.set', p)
+  },
   workspace: {
     create: (p) => call('workspace.create', p),
     list: (p) => call('workspace.list', p),

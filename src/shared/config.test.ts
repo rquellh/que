@@ -1,3 +1,5 @@
+import os from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   defaultJira,
@@ -189,6 +191,50 @@ protected_branches = "main"
         { key: 'allow_bypass_permissions', message: 'must be true or false' },
         { key: 'protected_branches', message: 'must be a list of strings' }
       ]
+    })
+  })
+
+  describe('instructions_file', () => {
+    it('reads an absolute path as is', () => {
+      const r = parseConfig('instructions_file = "/Users/dev/notes/delegation.md"', env)
+      expect(r).toMatchObject({
+        ok: true,
+        config: { instructionsFile: '/Users/dev/notes/delegation.md' }
+      })
+    })
+
+    it('expands a leading ~ to the home directory', () => {
+      const r = parseConfig('instructions_file = "~/.config/que/instructions.md"', env)
+      expect(r).toMatchObject({
+        ok: true,
+        config: { instructionsFile: join(os.homedir(), '.config/que/instructions.md') }
+      })
+    })
+
+    it('treats an empty string as unset', () => {
+      const r = parseConfig('instructions_file = ""', env)
+      expect(r.ok).toBe(true)
+      expect(r.ok && r.config.instructionsFile).toBeUndefined()
+    })
+
+    it('reports a value that is not a string by key', () => {
+      expect(parseConfig('instructions_file = 3', env)).toEqual({
+        ok: false,
+        errors: [{ key: 'instructions_file', message: 'must be a path' }]
+      })
+    })
+
+    it('round-trips through a `que config set` patch', () => {
+      const patch = parseConfigAssignment('instructions_file=~/notes/delegation.md')
+      expect(patch).toEqual({ instructions_file: '~/notes/delegation.md' })
+
+      const merged = mergeConfigPatch({ concurrency: 3 }, patch)
+      expect(parseConfig(stringifyConfig(merged), env)).toMatchObject({
+        ok: true,
+        config: { concurrency: 3, instructionsFile: join(os.homedir(), 'notes/delegation.md') }
+      })
+      const removed = mergeConfigPatch(merged, parseConfigAssignment('instructions_file=null'))
+      expect(removed).toEqual({ concurrency: 3 })
     })
   })
 

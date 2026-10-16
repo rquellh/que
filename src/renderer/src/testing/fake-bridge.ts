@@ -4,6 +4,7 @@
 import type {
   ConfigGetResult,
   ConfigSetParams,
+  InstructionsGetResult,
   Events,
   PrThread,
   PrThreadEntry,
@@ -88,6 +89,9 @@ class FakeBridge {
   private unlockRequests: Array<{ minutes?: number; why?: string }> = []
   private configBook: ConfigGetResult = defaultConfigBook()
   private configSets: ConfigSetParams[] = []
+  /** The instructions file's text; null while it does not exist. */
+  private instructionsText: string | null = null
+  private instructionsSets: string[] = []
 
   constructor() {
     this.api = {
@@ -124,10 +128,31 @@ class FakeBridge {
         set: async (p) => {
           this.configSets.push(structuredClone(p))
           this.configBook = { ...this.configBook, raw: mergePatch(this.configBook.raw, p.patch) }
+          if ('instructions_file' in p.patch) {
+            const file = p.patch.instructions_file
+            this.configBook.config = {
+              ...this.configBook.config,
+              instructionsFile: typeof file === 'string' && file !== '' ? file : undefined
+            }
+          }
           this.emit('config.changed', structuredClone(this.configBook))
           return structuredClone(this.configBook)
         },
         on: (event, cb) => this.subscribe(event, cb as Listener)
+      },
+      instructions: {
+        get: async () => this.instructionsResult(),
+        set: async (p) => {
+          if (!this.configBook.config.instructionsFile) {
+            throw rpcError(
+              'not_configured',
+              'no instructions file: set instructions_file in the que config first'
+            )
+          }
+          this.instructionsSets.push(p.content)
+          this.instructionsText = p.content
+          return this.instructionsResult()
+        }
       },
       term: {
         create: async (p) => {
@@ -476,6 +501,22 @@ class FakeBridge {
     this.configBook = { ...this.configBook, config: makeUserConfig(config), raw }
   }
 
+  /** The instructions file's text (instructions.get); null means it does not exist yet. */
+  seedInstructions(content: string | null): void {
+    this.instructionsText = content
+  }
+
+  /** Every instructions.set call's content, in order. */
+  instructionsSetCalls(): string[] {
+    return [...this.instructionsSets]
+  }
+
+  private instructionsResult(): InstructionsGetResult {
+    const path = this.configBook.config.instructionsFile
+    if (!path) return { exists: false, content: '' }
+    return { path, exists: this.instructionsText !== null, content: this.instructionsText ?? '' }
+  }
+
   /** Every config.set call's params, in order. */
   configSetCalls(): ConfigSetParams[] {
     return this.configSets.map((c) => structuredClone(c))
@@ -770,6 +811,8 @@ class FakeBridge {
     this.unlockRequests = []
     this.configBook = defaultConfigBook()
     this.configSets = []
+    this.instructionsText = null
+    this.instructionsSets = []
   }
 
   private workspace(id: string): Workspace {

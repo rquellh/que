@@ -1196,11 +1196,56 @@ body.resizing {
   padding: 2px 8px 2px 0;
 }
 
-.settings .actions {
+.settings .day-status {
   display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 10px;
+  gap: 8px;
+  align-items: baseline;
+}
+
+/* A field's label with its Saved mark at the end of the row. */
+.settings .field-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.settings .saved-slot {
+  margin-left: auto;
+}
+
+.settings .saved-mark {
+  font: 10px var(--mono);
+  color: var(--fg-muted);
+  animation: saved-fade 2s ease-in forwards;
+}
+
+@keyframes saved-fade {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings .saved-mark {
+    animation: none;
+  }
+}
+
+.settings .apply-tonight {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.settings .apply-tonight strong {
+  color: var(--fg);
+  font-weight: 600;
 }
 
 /* ---- tickets ------------------------------------------------------------ */

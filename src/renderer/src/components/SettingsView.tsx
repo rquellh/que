@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type {
   InstructionsGetResult,
   QuietHoursConfig,
@@ -9,7 +9,6 @@ import { currentWindow } from '../../../daemon/quiet-hours'
 import { SUGGESTED_START_PROMPT } from '../../../shared/brief'
 import { WEEKDAYS } from '../../../shared/types'
 import { useQue, useStore } from '../store'
-import Dialog from './Dialog'
 import UnlockStatus from './UnlockStatus'
 
 type DayMode = 'inherit' | 'custom' | 'none'
@@ -49,6 +48,9 @@ const WEEK: Weekday[] = [...WEEKDAYS.slice(1), WEEKDAYS[0]]
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
 
+/** How long the Saved mark stays after a write. */
+const SAVED_MS = 2_000
+
 function toForm(c: UserConfig): Form {
   const q = c.quietHours
   const days = Object.fromEntries(
@@ -86,41 +88,6 @@ function toForm(c: UserConfig): Form {
   }
 }
 
-/** The form's problems, one line each; empty when it can be saved. */
-function validate(f: Form): string[] {
-  const errors: string[] = []
-  const window = (label: string, start: string, end: string): void => {
-    if (!HHMM.test(start) || !HHMM.test(end)) errors.push(`${label}: use 24-hour HH:MM times`)
-    else if (start === end) errors.push(`${label}: start and end must differ`)
-  }
-  window('Quiet hours', f.start, f.end)
-  for (const d of WEEK) {
-    if (f.days[d].mode === 'custom') window(capital(d), f.days[d].start, f.days[d].end)
-  }
-  const minutes = Number(f.unlockMinutes)
-  if (f.unlockMinutes.trim() === '' || !Number.isFinite(minutes) || minutes <= 0) {
-    errors.push('Unlock minutes must be a positive number')
-  }
-  const poll = Number(f.pollMinutes)
-  if (f.pollMinutes.trim() === '' || !Number.isFinite(poll) || poll <= 0) {
-    errors.push('Sync minutes must be a positive number')
-  }
-  if (f.useStartPrompt && f.workspacePrompt.trim() === '') {
-    errors.push('The workspace start prompt cannot be empty')
-  }
-  if (f.startPrompt.trim() === '') errors.push('The start prompt cannot be empty')
-  if (f.summaryModel.trim() === '') errors.push('The summary model cannot be empty')
-  const interval = Number(f.summaryInterval)
-  if (f.summaryInterval.trim() === '' || !Number.isInteger(interval) || interval < 1) {
-    errors.push('Summary minutes must be a whole number of at least 1')
-  }
-  const file = f.instructionsFile.trim()
-  if (file !== '' && !file.startsWith('/') && !file.startsWith('~')) {
-    errors.push('The instructions file must be an absolute path or start with ~')
-  }
-  return errors
-}
-
 function capital(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
@@ -140,77 +107,280 @@ function quietOf(f: Form): QuietHoursConfig {
   }
 }
 
-/** The config.set patch (the file's snake_case keys); `null` removes an override. */
-function patchOf(f: Form): Record<string, unknown> {
-  const quiet: Record<string, unknown> = {
-    enabled: f.enabled,
-    default: [f.start, f.end],
-    unlock_minutes: Number(f.unlockMinutes)
+/** A quiet window's problem, or null. */
+function windowProblem(start: string, end: string): string | null {
+  if (!HHMM.test(start) || !HHMM.test(end)) return 'Use 24-hour HH:MM times'
+  if (start === end) return 'Start and end must differ'
+  return null
+}
+
+function positive(value: string, message: string): string | null {
+  const n = Number(value)
+  return value.trim() === '' || !Number.isFinite(n) || n <= 0 ? message : null
+}
+
+function filled(value: string, message: string): string | null {
+  return value.trim() === '' ? message : null
+}
+
+/** One setting the view validates and writes on its own. */
+interface FieldSpec {
+  /** Copies this field's part of `from` over `into`. */
+  take: (from: Form, into: Form) => Form
+  /** What is wrong with this field's value in a form, or null. */
+  check?: (f: Form) => string | null
+  /** The config.set patch (the file's snake_case keys) for this field alone; `null` removes. */
+  patch: (f: Form) => Record<string, unknown>
+  /** A quiet-hours write, which may end tonight's window early and so asks first. */
+  quiet?: true
+}
+
+const own =
+  (...keys: Array<keyof Form>) =>
+  (from: Form, into: Form): Form => {
+    const next: Record<string, unknown> = { ...into }
+    for (const k of keys) next[k] = from[k]
+    return next as unknown as Form
   }
-  for (const d of WEEKDAYS) {
-    const day = f.days[d]
-    quiet[d] = day.mode === 'inherit' ? null : day.mode === 'none' ? 'none' : [day.start, day.end]
-  }
+
+const quietPatch = (q: Record<string, unknown>): Record<string, unknown> => ({ quiet_hours: q })
+
+function daySpec(d: Weekday): FieldSpec {
   return {
-    quiet_hours: quiet,
-    notifications: {
-      chime_on_complete: f.chimeComplete,
-      chime_on_needs_input: f.chimeNeedsInput,
-      morning_summary: f.morningSummary
+    take: (from, into) => ({ ...into, days: { ...into.days, [d]: { ...from.days[d] } } }),
+    check: (f) =>
+      f.days[d].mode === 'custom' ? windowProblem(f.days[d].start, f.days[d].end) : null,
+    patch: (f) => {
+      const day = f.days[d]
+      return quietPatch({
+        [d]: day.mode === 'inherit' ? null : day.mode === 'none' ? 'none' : [day.start, day.end]
+      })
     },
-    jira: {
-      jql: f.jql,
-      site: f.site.trim() === '' ? null : f.site.trim(),
-      poll_minutes: Number(f.pollMinutes),
-      start_prompt: f.startPrompt
-    },
-    start_prompt: f.useStartPrompt ? f.workspacePrompt : null,
-    summaries: f.summaries,
-    summary_model: f.summaryModel.trim(),
-    summary_interval_minutes: Number(f.summaryInterval),
-    instructions_file: f.instructionsFile.trim() === '' ? null : f.instructionsFile.trim(),
-    protected_branches: f.protectedBranches
-      .split(',')
-      .map((b) => b.trim())
-      .filter((b) => b !== '')
+    quiet: true
   }
 }
 
-/** Quiet hours, notifications and the pull-request guard, saved to the config file. */
+/** The toggle and its prompt write one key: the prompt while on, removed while off. */
+const startPromptSpec: FieldSpec = {
+  take: own('useStartPrompt', 'workspacePrompt'),
+  check: (f) =>
+    f.useStartPrompt
+      ? filled(f.workspacePrompt, 'The workspace start prompt cannot be empty')
+      : null,
+  patch: (f) => ({ start_prompt: f.useStartPrompt ? f.workspacePrompt : null })
+}
+
+const DAY_SPECS = Object.fromEntries(WEEKDAYS.map((d) => [`day-${d}`, daySpec(d)])) as Record<
+  `day-${Weekday}`,
+  FieldSpec
+>
+
+const SPECS = {
+  'quiet-enabled': {
+    take: own('enabled'),
+    patch: (f) => quietPatch({ enabled: f.enabled }),
+    quiet: true
+  },
+  'quiet-start': {
+    take: own('start'),
+    check: (f) => windowProblem(f.start, f.end),
+    patch: (f) => quietPatch({ default: [f.start, f.end] }),
+    quiet: true
+  },
+  'quiet-end': {
+    take: own('end'),
+    check: (f) => windowProblem(f.start, f.end),
+    patch: (f) => quietPatch({ default: [f.start, f.end] }),
+    quiet: true
+  },
+  'unlock-minutes': {
+    take: own('unlockMinutes'),
+    check: (f) => positive(f.unlockMinutes, 'Unlock minutes must be a positive number'),
+    patch: (f) => quietPatch({ unlock_minutes: Number(f.unlockMinutes) }),
+    quiet: true
+  },
+  ...DAY_SPECS,
+  'chime-complete': {
+    take: own('chimeComplete'),
+    patch: (f) => ({ notifications: { chime_on_complete: f.chimeComplete } })
+  },
+  'chime-needs-input': {
+    take: own('chimeNeedsInput'),
+    patch: (f) => ({ notifications: { chime_on_needs_input: f.chimeNeedsInput } })
+  },
+  'morning-summary': {
+    take: own('morningSummary'),
+    patch: (f) => ({ notifications: { morning_summary: f.morningSummary } })
+  },
+  'tickets-jql': {
+    take: own('jql'),
+    patch: (f) => ({ jira: { jql: f.jql } })
+  },
+  'jira-site': {
+    take: own('site'),
+    patch: (f) => ({ jira: { site: f.site.trim() === '' ? null : f.site.trim() } })
+  },
+  'tickets-poll': {
+    take: own('pollMinutes'),
+    check: (f) => positive(f.pollMinutes, 'Sync minutes must be a positive number'),
+    patch: (f) => ({ jira: { poll_minutes: Number(f.pollMinutes) } })
+  },
+  'tickets-prompt': {
+    take: own('startPrompt'),
+    check: (f) => filled(f.startPrompt, 'The start prompt cannot be empty'),
+    patch: (f) => ({ jira: { start_prompt: f.startPrompt } })
+  },
+  'start-prompt-enabled': startPromptSpec,
+  'workspace-prompt': startPromptSpec,
+  'summaries-enabled': {
+    take: own('summaries'),
+    patch: (f) => ({ summaries: f.summaries })
+  },
+  'summary-model': {
+    take: own('summaryModel'),
+    check: (f) => filled(f.summaryModel, 'The summary model cannot be empty'),
+    patch: (f) => ({ summary_model: f.summaryModel.trim() })
+  },
+  'summary-interval': {
+    take: own('summaryInterval'),
+    check: (f) => {
+      const n = Number(f.summaryInterval)
+      return f.summaryInterval.trim() === '' || !Number.isInteger(n) || n < 1
+        ? 'Summary minutes must be a whole number of at least 1'
+        : null
+    },
+    patch: (f) => ({ summary_interval_minutes: Number(f.summaryInterval) })
+  },
+  'instructions-file': {
+    take: own('instructionsFile'),
+    check: (f) => {
+      const file = f.instructionsFile.trim()
+      return file !== '' && !file.startsWith('/') && !file.startsWith('~')
+        ? 'The instructions file must be an absolute path or start with ~'
+        : null
+    },
+    patch: (f) => ({
+      instructions_file: f.instructionsFile.trim() === '' ? null : f.instructionsFile.trim()
+    })
+  },
+  'protected-branches': {
+    take: own('protectedBranches'),
+    patch: (f) => ({
+      protected_branches: f.protectedBranches
+        .split(',')
+        .map((b) => b.trim())
+        .filter((b) => b !== '')
+    })
+  }
+} satisfies Record<string, FieldSpec>
+
+type Field = keyof typeof SPECS
+
+/** The instructions file's text, written through instructions.set rather than config.set. */
+const CONTENT = 'instructions-content'
+type Mark = Field | typeof CONTENT
+
+/** A brief "Saved" after a write: a polite live region, the mark fading as it goes. */
+function SavedMark({ field, shown }: { field: Mark; shown: boolean }): React.JSX.Element {
+  return (
+    <span className="saved-slot" role="status">
+      {shown && (
+        <span className="saved-mark" data-testid={`settings-${field}-saved`}>
+          Saved
+        </span>
+      )}
+    </span>
+  )
+}
+
+/** A field's own problem: a value it refuses, or the daemon's refusal of the write. */
+function FieldError({ field, error }: { field: Mark; error?: string }): React.JSX.Element | null {
+  if (!error) return null
+  return (
+    <span className="form-error" role="alert" data-testid={`settings-${field}-error`}>
+      {error}
+    </span>
+  )
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/** A number field's change from its stepper (or arrow keys) rather than from typing. */
+function stepped(e: React.ChangeEvent<HTMLInputElement>): boolean {
+  return !(e.nativeEvent as InputEvent).inputType
+}
+
+/**
+ * Quiet hours, notifications and the rest of the config file. Each field writes on its own:
+ * toggles, selects and steppers as they change, text on blur or Enter (Escape reverts), each
+ * followed by a brief Saved mark or its own error.
+ */
 export default function SettingsView(): React.JSX.Element {
   const store = useStore()
   const { config, quiet, connected } = useQue()
   const [form, setForm] = useState<Form | null>(null)
-  const [errors, setErrors] = useState<string[]>([])
-  const [confirming, setConfirming] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const formRef = useRef<Form | null>(null)
+  formRef.current = form
+  /** What the daemon last accepted, field by field: the base of every write and of Escape. */
+  const saved = useRef<Form | null>(null)
+  /** Each field's writes run one after another, so a slow answer never lands after a newer one. */
+  const chains = useRef(new Map<Mark, Promise<void>>())
+  const quietRef = useRef(quiet)
+  quietRef.current = quiet
+  const live = useRef(true)
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>())
+  const stamp = useRef(0)
+  const [errors, setErrors] = useState<Partial<Record<Mark, string>>>({})
+  const [marks, setMarks] = useState<Partial<Record<Mark, number>>>({})
+  /** Quiet-hours writes waiting on "apply tonight?", answered in order. */
+  const asks = useRef<Array<(tonight: boolean) => void>>([])
+  const [asking, setAsking] = useState(false)
   const [instructions, setInstructions] = useState<InstructionsGetResult | null>(null)
   const [draft, setDraft] = useState('')
-  const [instructionsSaved, setInstructionsSaved] = useState(false)
-  const [instructionsError, setInstructionsError] = useState<string | null>(null)
+  const draftRef = useRef('')
+  draftRef.current = draft
+  const savedContent = useRef('')
+  const [loadError, setLoadError] = useState<string | null>(null)
   const instructionsFile = config?.config.instructionsFile
 
   useEffect(() => {
-    if (config && form === null) setForm(toForm(config.config))
+    if (config && form === null) {
+      const f = toForm(config.config)
+      saved.current = f
+      setForm(f)
+    }
   }, [config, form])
+
+  useEffect(() => {
+    live.current = true
+    const pending = timers.current
+    return () => {
+      live.current = false
+      for (const t of pending) clearTimeout(t)
+      pending.clear()
+    }
+  }, [])
 
   // The file's text, read again whenever the configured path changes.
   // biome-ignore lint/correctness/useExhaustiveDependencies: reload on a new path only
   useEffect(() => {
-    let live = true
+    let current = true
     store.loadInstructions().then(
       (r) => {
-        if (!live) return
+        if (!current) return
         setInstructions(r)
         setDraft(r.content)
-        setInstructionsError(null)
+        savedContent.current = r.content
+        setLoadError(null)
       },
       (err: unknown) => {
-        if (live) setInstructionsError(err instanceof Error ? err.message : String(err))
+        if (current) setLoadError(messageOf(err))
       }
     )
     return () => {
-      live = false
+      current = false
     }
   }, [store, instructionsFile])
 
@@ -222,50 +392,159 @@ export default function SettingsView(): React.JSX.Element {
     )
   }
 
-  const update = (patch: Partial<Form>): void => {
-    setForm({ ...form, ...patch })
-    setSaved(false)
-  }
-  const updateDay = (d: Weekday, patch: Partial<DayForm>): void =>
-    update({ days: { ...form.days, [d]: { ...form.days[d], ...patch } } })
+  const setError = (field: Mark, error: string | null): void =>
+    setErrors((e) => {
+      if ((e[field] ?? null) === error) return e
+      const next = { ...e }
+      if (error === null) delete next[field]
+      else next[field] = error
+      return next
+    })
 
-  const save = async (applyTonight: boolean): Promise<void> => {
-    setConfirming(false)
-    try {
-      await store.saveConfig({ patch: patchOf(form), applyTonight })
-      setErrors([])
-      setSaved(true)
-    } catch (err) {
-      setErrors([err instanceof Error ? err.message : String(err)])
-    }
-  }
-
-  const saveInstructions = async (): Promise<void> => {
-    try {
-      const r = await store.saveInstructions(draft)
-      setInstructions(r)
-      setInstructionsError(null)
-      setInstructionsSaved(true)
-    } catch (err) {
-      setInstructionsError(err instanceof Error ? err.message : String(err))
-    }
+  const flash = (field: Mark): void => {
+    stamp.current += 1
+    const mine = stamp.current
+    setMarks((m) => ({ ...m, [field]: mine }))
+    const t = setTimeout(() => {
+      timers.current.delete(t)
+      setMarks((m) => {
+        if (m[field] !== mine) return m
+        const next = { ...m }
+        delete next[field]
+        return next
+      })
+    }, SAVED_MS)
+    timers.current.add(t)
   }
 
-  const submit = (e: React.FormEvent): void => {
-    e.preventDefault()
-    const problems = validate(form)
-    setErrors(problems)
-    if (problems.length > 0) return
-    // Tonight's window in progress would end sooner (or go away): ask first.
-    if (quiet?.inQuietHours && quiet.windowEnd) {
-      const next = currentWindow(store.now(), quietOf(form))
-      if (!next || next.end.getTime() < Date.parse(quiet.windowEnd)) {
-        setConfirming(true)
-        return
+  const enqueue = (field: Mark, job: () => Promise<void>): void => {
+    const prev = chains.current.get(field) ?? Promise.resolve()
+    chains.current.set(
+      field,
+      prev.then(job).catch(() => {})
+    )
+  }
+
+  const ask = (): Promise<boolean> =>
+    new Promise((resolve) => {
+      asks.current.push(resolve)
+      setAsking(true)
+    })
+
+  const answer = (tonight: boolean): void => {
+    const resolve = asks.current.shift()
+    setAsking(asks.current.length > 0)
+    resolve?.(tonight)
+  }
+
+  /** Tonight's window in progress would end sooner (or go away) under this config. */
+  const endsTonightEarly = (candidate: Form): boolean => {
+    const q = quietRef.current
+    if (!q?.inQuietHours || !q.windowEnd) return false
+    const next = currentWindow(store.now(), quietOf(candidate))
+    return !next || next.end.getTime() < Date.parse(q.windowEnd)
+  }
+
+  /** Validates one field's value in `next` and, when it is fine and changed, writes it alone. */
+  const commit = (field: Field, next: Form | null): void => {
+    const base = saved.current
+    if (!next || !base) return
+    const spec: FieldSpec = SPECS[field]
+    const problem = spec.check?.(spec.take(next, base)) ?? null
+    setError(field, problem)
+    if (problem) return
+    enqueue(field, async () => {
+      const before = saved.current ?? base
+      const candidate = spec.take(next, before)
+      const patch = spec.patch(candidate)
+      if (JSON.stringify(patch) === JSON.stringify(spec.patch(before))) return
+      const applyTonight = spec.quiet && endsTonightEarly(candidate) ? await ask() : false
+      try {
+        await store.saveConfig({ patch, applyTonight })
+        saved.current = spec.take(next, saved.current ?? before)
+        if (!live.current) return
+        setError(field, null)
+        flash(field)
+      } catch (err) {
+        if (live.current) setError(field, messageOf(err))
+      }
+    })
+  }
+
+  const revert = (field: Field): void => {
+    const base = saved.current
+    if (base) setForm((f) => (f ? SPECS[field].take(base, f) : f))
+    setError(field, null)
+  }
+
+  const commitContent = (): void => {
+    const text = draftRef.current
+    enqueue(CONTENT, async () => {
+      if (text === savedContent.current) return
+      try {
+        const r = await store.saveInstructions(text)
+        savedContent.current = r.content
+        if (!live.current) return
+        setInstructions(r)
+        setError(CONTENT, null)
+        flash(CONTENT)
+      } catch (err) {
+        if (live.current) setError(CONTENT, messageOf(err))
+      }
+    })
+  }
+
+  /** A text field: written on blur, or on Enter in a one-line input; Escape reverts it. */
+  const text = (field: Field) => ({
+    onBlur: () => commit(field, formRef.current),
+    onKeyDown: (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      if (e.key === 'Enter' && e.currentTarget instanceof HTMLInputElement) {
+        e.preventDefault()
+        commit(field, formRef.current)
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        revert(field)
       }
     }
-    void save(false)
+  })
+
+  /** A toggle or select: written as it changes. */
+  const now = (field: Field, patch: Partial<Form>): void => {
+    const next = { ...form, ...patch }
+    setForm(next)
+    commit(field, next)
   }
+
+  const update = (patch: Partial<Form>): void => setForm({ ...form, ...patch })
+
+  /** A number field: a stepper writes at once, typing waits for blur or Enter. */
+  const number =
+    (field: Field, key: 'unlockMinutes' | 'pollMinutes' | 'summaryInterval') =>
+    (e: React.ChangeEvent<HTMLInputElement>): void => {
+      const next = { ...form, [key]: e.target.value }
+      setForm(next)
+      if (stepped(e)) commit(field, next)
+    }
+
+  const dayOf = (d: Weekday, patch: Partial<DayForm>): Form => ({
+    ...form,
+    days: { ...form.days, [d]: { ...form.days[d], ...patch } }
+  })
+
+  const head = (label: string, field: Mark): React.JSX.Element => (
+    <span className="field-head">
+      {label}
+      <SavedMark field={field} shown={marks[field] !== undefined} />
+    </span>
+  )
+  const mark = (field: Mark): React.JSX.Element => (
+    <SavedMark field={field} shown={marks[field] !== undefined} />
+  )
+  const error = (field: Mark): React.JSX.Element => (
+    <FieldError field={field} error={errors[field]} />
+  )
+  const off = !connected
 
   return (
     <section className="settings" data-testid="settings-view" aria-labelledby="settings-title">
@@ -278,52 +557,62 @@ export default function SettingsView(): React.JSX.Element {
         </span>
         <UnlockStatus />
       </header>
-      <form className="settings-body" onSubmit={submit} noValidate>
-        <fieldset>
+      <form className="settings-body" onSubmit={(e) => e.preventDefault()} noValidate>
+        <fieldset disabled={off}>
           <legend>Quiet hours</legend>
           <label className="check">
             <input
               type="checkbox"
               data-testid="settings-quiet-enabled"
               checked={form.enabled}
-              onChange={(e) => update({ enabled: e.target.checked })}
+              onChange={(e) => now('quiet-enabled', { enabled: e.target.checked })}
             />
             Quiet hours on
+            {mark('quiet-enabled')}
           </label>
+          {error('quiet-enabled')}
           <div className="row">
             <label>
-              Start
+              {head('Start', 'quiet-start')}
               <input
                 type="time"
                 data-testid="settings-quiet-start"
                 value={form.start}
                 onChange={(e) => update({ start: e.target.value })}
+                {...text('quiet-start')}
               />
+              {error('quiet-start')}
             </label>
             <label>
-              End
+              {head('End', 'quiet-end')}
               <input
                 type="time"
                 data-testid="settings-quiet-end"
                 value={form.end}
                 onChange={(e) => update({ end: e.target.value })}
+                {...text('quiet-end')}
               />
+              {error('quiet-end')}
             </label>
             <label>
-              Unlock minutes
+              {head('Unlock minutes', 'unlock-minutes')}
               <input
                 type="number"
                 min="1"
                 data-testid="settings-unlock-minutes"
                 value={form.unlockMinutes}
-                onChange={(e) => update({ unlockMinutes: e.target.value })}
+                onChange={number('unlock-minutes', 'unlockMinutes')}
+                {...text('unlock-minutes')}
               />
+              {error('unlock-minutes')}
             </label>
           </div>
           <table className="days">
             <tbody>
               {WEEK.map((d) => {
                 const day = form.days[d]
+                const field = `day-${d}` as const
+                const times = text(field)
                 return (
                   <tr key={d} data-testid={`settings-day-${d}`}>
                     <th scope="row">{capital(d)}</th>
@@ -332,7 +621,11 @@ export default function SettingsView(): React.JSX.Element {
                         aria-label={`${capital(d)} quiet hours`}
                         data-testid={`settings-day-${d}-mode`}
                         value={day.mode}
-                        onChange={(e) => updateDay(d, { mode: e.target.value as DayMode })}
+                        onChange={(e) => {
+                          const next = dayOf(d, { mode: e.target.value as DayMode })
+                          setForm(next)
+                          commit(field, next)
+                        }}
                       >
                         <option value="inherit">Default</option>
                         <option value="custom">Custom</option>
@@ -347,98 +640,148 @@ export default function SettingsView(): React.JSX.Element {
                             aria-label={`${capital(d)} start`}
                             data-testid={`settings-day-${d}-start`}
                             value={day.start}
-                            onChange={(e) => updateDay(d, { start: e.target.value })}
+                            onChange={(e) => setForm(dayOf(d, { start: e.target.value }))}
+                            {...times}
                           />
                           <input
                             type="time"
                             aria-label={`${capital(d)} end`}
                             data-testid={`settings-day-${d}-end`}
                             value={day.end}
-                            onChange={(e) => updateDay(d, { end: e.target.value })}
+                            onChange={(e) => setForm(dayOf(d, { end: e.target.value }))}
+                            {...times}
                           />
                         </span>
                       )}
+                    </td>
+                    <td>
+                      <span className="day-status">
+                        {mark(field)}
+                        {error(field)}
+                      </span>
                     </td>
                   </tr>
                 )
               })}
             </tbody>
           </table>
+          {asking && (
+            <section
+              className="apply-tonight"
+              aria-labelledby="settings-apply-tonight-title"
+              data-testid="settings-apply-tonight-confirm"
+            >
+              <p className="hint">
+                <strong id="settings-apply-tonight-title">Apply tonight?</strong> This ends
+                tonight&apos;s quiet hours early. Apply it tonight, or save it for tomorrow?
+              </p>
+              <div className="dialog-actions">
+                <button
+                  type="button"
+                  data-testid="settings-apply-tonight-no"
+                  onClick={() => answer(false)}
+                >
+                  No, from tomorrow
+                </button>
+                <button
+                  type="button"
+                  data-testid="settings-apply-tonight-yes"
+                  onClick={() => answer(true)}
+                >
+                  Yes, tonight
+                </button>
+              </div>
+            </section>
+          )}
         </fieldset>
-        <fieldset>
+        <fieldset disabled={off}>
           <legend>Notifications</legend>
           <label className="check">
             <input
               type="checkbox"
               data-testid="settings-chime-complete"
               checked={form.chimeComplete}
-              onChange={(e) => update({ chimeComplete: e.target.checked })}
+              onChange={(e) => now('chime-complete', { chimeComplete: e.target.checked })}
             />
             Chime when a session finishes a turn or a task finishes (work hours)
+            {mark('chime-complete')}
           </label>
+          {error('chime-complete')}
           <label className="check">
             <input
               type="checkbox"
               data-testid="settings-chime-needs-input"
               checked={form.chimeNeedsInput}
-              onChange={(e) => update({ chimeNeedsInput: e.target.checked })}
+              onChange={(e) => now('chime-needs-input', { chimeNeedsInput: e.target.checked })}
             />
             Chime when a session needs input (work hours)
+            {mark('chime-needs-input')}
           </label>
+          {error('chime-needs-input')}
           <label className="check">
             <input
               type="checkbox"
               data-testid="settings-morning-summary"
               checked={form.morningSummary}
-              onChange={(e) => update({ morningSummary: e.target.checked })}
+              onChange={(e) => now('morning-summary', { morningSummary: e.target.checked })}
             />
             Morning summary when quiet hours end
+            {mark('morning-summary')}
           </label>
+          {error('morning-summary')}
         </fieldset>
-        <fieldset>
+        <fieldset disabled={off}>
           <legend>Tickets</legend>
           <label>
-            Filter
+            {head('Filter', 'tickets-jql')}
             <input
               data-testid="settings-tickets-jql"
               value={form.jql}
               onChange={(e) => update({ jql: e.target.value })}
+              {...text('tickets-jql')}
               autoComplete="off"
               spellCheck={false}
             />
+            {error('tickets-jql')}
           </label>
           <label>
-            Site
+            {head('Site', 'jira-site')}
             <input
               data-testid="settings-jira-site"
               value={form.site}
               onChange={(e) => update({ site: e.target.value })}
+              {...text('jira-site')}
               placeholder="team.example.net"
               autoComplete="off"
               spellCheck={false}
             />
+            {error('jira-site')}
             <span className="hint">
               The tracker host for ticket links; found from the CLI when empty
             </span>
           </label>
           <label>
-            Sync every (minutes)
+            {head('Sync every (minutes)', 'tickets-poll')}
             <input
               type="number"
               min="1"
               data-testid="settings-tickets-poll"
               value={form.pollMinutes}
-              onChange={(e) => update({ pollMinutes: e.target.value })}
+              onChange={number('tickets-poll', 'pollMinutes')}
+              {...text('tickets-poll')}
             />
+            {error('tickets-poll')}
           </label>
           <label>
-            Start prompt
+            {head('Start prompt', 'tickets-prompt')}
             <textarea
               rows={3}
               data-testid="settings-tickets-prompt"
               value={form.startPrompt}
               onChange={(e) => update({ startPrompt: e.target.value })}
+              {...text('tickets-prompt')}
             />
+            {error('tickets-prompt')}
           </label>
           <div data-testid="settings-tickets-projects" className="projects-learned">
             {Object.keys(config.config.jira.projects).length === 0 ? (
@@ -452,7 +795,7 @@ export default function SettingsView(): React.JSX.Element {
             )}
           </div>
         </fieldset>
-        <fieldset>
+        <fieldset disabled={off}>
           <legend>New workspaces</legend>
           <label className="check">
             <input
@@ -460,7 +803,7 @@ export default function SettingsView(): React.JSX.Element {
               data-testid="settings-start-prompt-enabled"
               checked={form.useStartPrompt}
               onChange={(e) =>
-                update({
+                now('start-prompt-enabled', {
                   useStartPrompt: e.target.checked,
                   ...(e.target.checked && form.workspacePrompt.trim() === ''
                     ? { workspacePrompt: SUGGESTED_START_PROMPT }
@@ -469,16 +812,20 @@ export default function SettingsView(): React.JSX.Element {
               }
             />
             Use a start prompt instead of the brief
+            {mark('start-prompt-enabled')}
           </label>
+          {error('start-prompt-enabled')}
           {form.useStartPrompt ? (
             <label>
-              Start prompt
+              {head('Start prompt', 'workspace-prompt')}
               <textarea
                 rows={3}
                 data-testid="settings-workspace-prompt"
                 value={form.workspacePrompt}
                 onChange={(e) => update({ workspacePrompt: e.target.value })}
+                {...text('workspace-prompt')}
               />
+              {error('workspace-prompt')}
               <span className="hint">
                 Sent to Claude instead of the brief; the brief is in .que/brief.md
               </span>
@@ -487,158 +834,115 @@ export default function SettingsView(): React.JSX.Element {
             <p className="hint">Claude starts on the brief itself.</p>
           )}
         </fieldset>
-        <fieldset>
+        <fieldset disabled={off}>
           <legend>Sidebar titles</legend>
           <label className="check">
             <input
               type="checkbox"
               data-testid="settings-summaries-enabled"
               checked={form.summaries}
-              onChange={(e) => update({ summaries: e.target.checked })}
+              onChange={(e) => now('summaries-enabled', { summaries: e.target.checked })}
             />
             Summarise what each session is doing in its sidebar title
+            {mark('summaries-enabled')}
           </label>
+          {error('summaries-enabled')}
           <label>
-            Model
+            {head('Model', 'summary-model')}
             <input
               data-testid="settings-summary-model"
               value={form.summaryModel}
               onChange={(e) => update({ summaryModel: e.target.value })}
+              {...text('summary-model')}
               autoComplete="off"
               spellCheck={false}
             />
+            {error('summary-model')}
           </label>
           <label>
-            At most every (minutes)
+            {head('At most every (minutes)', 'summary-interval')}
             <input
               type="number"
               min="1"
               step="1"
               data-testid="settings-summary-interval"
               value={form.summaryInterval}
-              onChange={(e) => update({ summaryInterval: e.target.value })}
+              onChange={number('summary-interval', 'summaryInterval')}
+              {...text('summary-interval')}
             />
+            {error('summary-interval')}
             <span className="hint">
               One short call to the model after a turn ends; renaming a workspace keeps your title
             </span>
           </label>
         </fieldset>
-        <fieldset data-testid="settings-instructions">
+        <fieldset data-testid="settings-instructions" disabled={off}>
           <legend>Instructions</legend>
           <label>
-            File
+            {head('File', 'instructions-file')}
             <input
               data-testid="settings-instructions-file"
               value={form.instructionsFile}
               onChange={(e) => update({ instructionsFile: e.target.value })}
+              {...text('instructions-file')}
               placeholder="~/.config/que/instructions.md"
               autoComplete="off"
               spellCheck={false}
             />
+            {error('instructions-file')}
             <span className="hint">
               Appended to the system prompt of every session started in a workspace. New sessions
               pick up edits; a resumed one after it compacts.
             </span>
           </label>
           <label>
-            Content
+            {head('Content', CONTENT)}
             <textarea
               rows={8}
               data-testid="settings-instructions-content"
               value={draft}
               disabled={!instructions?.path}
-              onChange={(e) => {
-                setDraft(e.target.value)
-                setInstructionsSaved(false)
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commitContent}
+              onKeyDown={(e) => {
+                if (e.key !== 'Escape') return
+                e.preventDefault()
+                e.stopPropagation()
+                setDraft(savedContent.current)
+                setError(CONTENT, null)
               }}
             />
+            {error(CONTENT)}
           </label>
           {!instructions?.path && (
             <p className="hint" data-testid="settings-instructions-unset">
-              Set a file above and save to edit the instructions here.
+              Set a file above to edit the instructions here.
             </p>
           )}
-          {instructionsError && (
+          {loadError && (
             <p className="form-error" role="alert" data-testid="settings-instructions-error">
-              {instructionsError}
+              {loadError}
             </p>
           )}
-          <div className="actions">
-            {instructionsSaved && (
-              <span className="muted" role="status" data-testid="settings-instructions-saved">
-                Saved
-              </span>
-            )}
-            <button
-              type="button"
-              data-testid="settings-instructions-save"
-              disabled={!connected || !instructions?.path}
-              onClick={() => void saveInstructions()}
-            >
-              Save instructions
-            </button>
-          </div>
         </fieldset>
-        <fieldset>
+        <fieldset disabled={off}>
           <legend>Pull requests</legend>
           <label>
-            Protected branches
+            {head('Protected branches', 'protected-branches')}
             <input
               data-testid="settings-protected-branches"
               value={form.protectedBranches}
               onChange={(e) => update({ protectedBranches: e.target.value })}
+              {...text('protected-branches')}
             />
+            {error('protected-branches')}
           </label>
           <p className="hint">
             Never pushed to by Create draft PR or by an overnight task, besides each project&apos;s
             default branch. Comma-separated.
           </p>
         </fieldset>
-        {errors.length > 0 && (
-          <ul className="form-error" role="alert" data-testid="settings-error">
-            {errors.map((e) => (
-              <li key={e}>{e}</li>
-            ))}
-          </ul>
-        )}
-        <div className="actions">
-          {saved && (
-            <span className="muted" role="status" data-testid="settings-saved">
-              Saved
-            </span>
-          )}
-          <button type="submit" data-testid="settings-save" disabled={!connected}>
-            Save
-          </button>
-        </div>
       </form>
-      {confirming && (
-        <Dialog
-          title="Apply tonight?"
-          testId="settings-apply-tonight-confirm"
-          onClose={() => setConfirming(false)}
-        >
-          <p className="hint">
-            This ends tonight&apos;s quiet hours early. Apply it tonight, or save it for tomorrow?
-          </p>
-          <div className="dialog-actions">
-            <button
-              type="button"
-              data-testid="settings-apply-tonight-no"
-              onClick={() => void save(false)}
-            >
-              No, from tomorrow
-            </button>
-            <button
-              type="button"
-              data-testid="settings-apply-tonight-yes"
-              onClick={() => void save(true)}
-            >
-              Yes, tonight
-            </button>
-          </div>
-        </Dialog>
-      )}
     </section>
   )
 }

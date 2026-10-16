@@ -100,6 +100,10 @@ class FakeBridge {
   private unlockRequests: Array<{ minutes?: number; why?: string }> = []
   private configBook: ConfigGetResult = defaultConfigBook()
   private configSets: ConfigSetParams[] = []
+  /** The daemon's refusal of the next config.set, if one is set. */
+  private configRefusal: string | null = null
+  /** config.set calls held until released, when holding. */
+  private configHeld: Array<() => void> | null = null
   /** The instructions file's text; null while it does not exist. */
   private instructionsText: string | null = null
   private instructionsSets: string[] = []
@@ -137,6 +141,13 @@ class FakeBridge {
       config: {
         get: async () => structuredClone(this.configBook),
         set: async (p) => {
+          const held = this.configHeld
+          if (held) await new Promise<void>((release) => held.push(release))
+          if (this.configRefusal !== null) {
+            const message = this.configRefusal
+            this.configRefusal = null
+            throw rpcError('bad_request', message)
+          }
           this.configSets.push(structuredClone(p))
           this.configBook = { ...this.configBook, raw: mergePatch(this.configBook.raw, p.patch) }
           if ('instructions_file' in p.patch) {
@@ -572,6 +583,23 @@ class FakeBridge {
     return { path, exists: this.instructionsText !== null, content: this.instructionsText ?? '' }
   }
 
+  /** Makes the next config.set fail with this message, as the daemon refuses a bad value. */
+  refuseConfigSet(message: string): void {
+    this.configRefusal = message
+  }
+
+  /** Holds every config.set until releaseConfigSets(), as a slow daemon would. */
+  holdConfigSets(): void {
+    this.configHeld ??= []
+  }
+
+  /** Lets the held config.set calls through, in the order they arrived, and stops holding. */
+  releaseConfigSets(): void {
+    const held = this.configHeld ?? []
+    this.configHeld = null
+    for (const release of held) release()
+  }
+
   /** Every config.set call's params, in order. */
   configSetCalls(): ConfigSetParams[] {
     return this.configSets.map((c) => structuredClone(c))
@@ -890,6 +918,8 @@ class FakeBridge {
     this.unlockRequests = []
     this.configBook = defaultConfigBook()
     this.configSets = []
+    this.configRefusal = null
+    this.configHeld = null
     this.instructionsText = null
     this.instructionsSets = []
   }

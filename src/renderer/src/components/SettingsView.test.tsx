@@ -33,6 +33,16 @@ async function openSettings(user: ReturnType<typeof userEvent.setup>): Promise<H
   return screen.findByTestId('settings-view')
 }
 
+/** Replaces a field's text by typing, as a person would, without leaving it. */
+async function retype(
+  user: ReturnType<typeof userEvent.setup>,
+  field: HTMLElement,
+  text: string
+): Promise<void> {
+  await user.clear(field)
+  await user.type(field, text)
+}
+
 describe('SettingsView', () => {
   describe('rendering', () => {
     it('loads the config: quiet hours, per-day overrides, notifications, protected branches and the path', async () => {
@@ -66,11 +76,140 @@ describe('SettingsView', () => {
         '/Users/dev/.config/que/config.toml'
       )
       expect(screen.queryByText('Overnight tasks')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^Save/ })).not.toBeInTheDocument()
+    })
+
+    it('disables the controls while the daemon is unreachable', async () => {
+      const user = userEvent.setup()
+      await openSettings(user)
+      const toggle = await screen.findByTestId('settings-chime-complete')
+      expect(toggle).toBeEnabled()
+
+      fakeBridge.disconnect()
+
+      await waitFor(() => expect(toggle).toBeDisabled())
+      expect(screen.getByTestId('settings-protected-branches')).toBeDisabled()
     })
   })
 
-  describe('user interactions', () => {
-    it('saves the changes as a config patch, removing overrides set back to the default', async () => {
+  describe('writing on change', () => {
+    it('writes a checkbox as soon as it changes, with only its key, then shows Saved briefly', async () => {
+      const user = userEvent.setup()
+      await openSettings(user)
+
+      await user.click(await screen.findByTestId('settings-chime-complete'))
+
+      await waitFor(() => {
+        expect(fakeBridge.configSetCalls()).toEqual([
+          { patch: { notifications: { chime_on_complete: false } }, applyTonight: false }
+        ])
+      })
+      expect(await screen.findByTestId('settings-chime-complete-saved')).toHaveTextContent('Saved')
+      await waitFor(
+        () => {
+          expect(screen.queryByTestId('settings-chime-complete-saved')).not.toBeInTheDocument()
+        },
+        { timeout: 4_000 }
+      )
+    })
+
+    it('writes a typed number on blur, not per keystroke', async () => {
+      const user = userEvent.setup()
+      await openSettings(user)
+
+      await retype(user, await screen.findByTestId('settings-unlock-minutes'), '30')
+      expect(fakeBridge.configSetCalls()).toEqual([])
+      await user.tab()
+
+      await waitFor(() => {
+        expect(fakeBridge.configSetCalls()).toEqual([
+          { patch: { quiet_hours: { unlock_minutes: 30 } }, applyTonight: false }
+        ])
+      })
+      expect(await screen.findByTestId('settings-unlock-minutes-saved')).toBeInTheDocument()
+    })
+
+    it('writes a typed number on Enter without submitting the form, and only once', async () => {
+      const user = userEvent.setup()
+      await openSettings(user)
+      const poll = await screen.findByTestId('settings-tickets-poll')
+
+      await retype(user, poll, '10')
+      await user.keyboard('{Enter}')
+
+      await waitFor(() => {
+        expect(fakeBridge.configSetCalls()).toEqual([
+          { patch: { jira: { poll_minutes: 10 } }, applyTonight: false }
+        ])
+      })
+      expect(poll).toHaveFocus()
+      expect(await screen.findByTestId('settings-tickets-poll-saved')).toBeInTheDocument()
+      await user.tab()
+      expect(fakeBridge.configSetCalls()).toHaveLength(1)
+    })
+
+    it('writes a textarea on blur, keeping Enter as a new line', async () => {
+      const user = userEvent.setup()
+      await openSettings(user)
+      const prompt = await screen.findByTestId('settings-tickets-prompt')
+
+      await retype(user, prompt, 'Plan first.{Enter}Then ask.')
+      expect(fakeBridge.configSetCalls()).toEqual([])
+      await user.tab()
+
+      await waitFor(() => {
+        expect(fakeBridge.configSetCalls()).toEqual([
+          { patch: { jira: { start_prompt: 'Plan first.\nThen ask.' } }, applyTonight: false }
+        ])
+      })
+    })
+
+    it('writes the protected branches as a list on blur', async () => {
+      const user = userEvent.setup()
+      await openSettings(user)
+
+      await retype(
+        user,
+        await screen.findByTestId('settings-protected-branches'),
+        'main, release, hotfix'
+      )
+      await user.tab()
+
+      await waitFor(() => {
+        expect(fakeBridge.configSetCalls()).toEqual([
+          { patch: { protected_branches: ['main', 'release', 'hotfix'] }, applyTonight: false }
+        ])
+      })
+    })
+
+    it('writes nothing when a field is left unchanged', async () => {
+      const user = userEvent.setup()
+      await openSettings(user)
+
+      await user.click(await screen.findByTestId('settings-tickets-jql'))
+      await user.tab()
+      await user.click(screen.getByTestId('settings-chime-needs-input'))
+
+      await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
+      expect(fakeBridge.configSetCalls()[0].patch).toEqual({
+        notifications: { chime_on_needs_input: true }
+      })
+    })
+
+    it('reverts a field to its saved value on Escape and writes nothing', async () => {
+      const user = userEvent.setup()
+      await openSettings(user)
+      const model = await screen.findByTestId('settings-summary-model')
+
+      await retype(user, model, 'sonnet')
+      await user.keyboard('{Escape}')
+
+      expect(model).toHaveValue('haiku')
+      await user.tab()
+      expect(fakeBridge.configSetCalls()).toEqual([])
+    })
+
+    it('writes the quiet window and per-day overrides, removing one set back to the default', async () => {
       const user = userEvent.setup()
       fakeBridge.setConfig({
         quietHours: {
@@ -82,56 +221,107 @@ describe('SettingsView', () => {
       })
       await openSettings(user)
 
-      await user.clear(await screen.findByTestId('settings-quiet-start'))
-      await user.type(screen.getByTestId('settings-quiet-start'), '20:00')
+      await retype(user, await screen.findByTestId('settings-quiet-start'), '20:00')
+      await user.keyboard('{Enter}')
+      await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
       await user.selectOptions(screen.getByTestId('settings-day-saturday-mode'), 'inherit')
+      await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(2))
       await user.selectOptions(screen.getByTestId('settings-day-monday-mode'), 'custom')
-      await user.clear(screen.getByTestId('settings-day-monday-end'))
-      await user.type(screen.getByTestId('settings-day-monday-end'), '06:30')
-      await user.click(screen.getByTestId('settings-chime-complete'))
-      await user.clear(screen.getByTestId('settings-protected-branches'))
-      await user.type(screen.getByTestId('settings-protected-branches'), 'main, release, hotfix')
-      await user.click(screen.getByTestId('settings-save'))
+      await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(3))
+      await retype(user, screen.getByTestId('settings-day-monday-end'), '06:30')
+      await user.tab()
 
+      await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(4))
+      expect(fakeBridge.configSetCalls().map((c) => c.patch)).toEqual([
+        { quiet_hours: { default: ['20:00', '07:00'] } },
+        { quiet_hours: { saturday: null } },
+        { quiet_hours: { monday: ['19:00', '07:00'] } },
+        { quiet_hours: { monday: ['19:00', '06:30'] } }
+      ])
+      expect(await screen.findByTestId('settings-day-monday-saved')).toBeInTheDocument()
+    })
+  })
+
+  describe('refusing a value', () => {
+    it('shows a bad number under its field, keeps the text, writes nothing, and other fields still save', async () => {
+      const user = userEvent.setup()
+      await openSettings(user)
+      const unlock = await screen.findByTestId('settings-unlock-minutes')
+
+      await retype(user, unlock, '0')
+      await user.tab()
+
+      expect(await screen.findByTestId('settings-unlock-minutes-error')).toHaveTextContent(
+        'Unlock minutes must be a positive number'
+      )
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'Unlock minutes must be a positive number'
+      )
+      expect(unlock).toHaveValue(0)
+      expect(fakeBridge.configSetCalls()).toEqual([])
+
+      await user.click(screen.getByTestId('settings-morning-summary'))
       await waitFor(() => {
-        expect(fakeBridge.configSetCalls()).toHaveLength(1)
+        expect(fakeBridge.configSetCalls()).toEqual([
+          { patch: { notifications: { morning_summary: true } }, applyTonight: false }
+        ])
       })
-      const [{ patch, applyTonight }] = fakeBridge.configSetCalls()
-      expect(applyTonight).toBe(false)
-      expect(patch).toMatchObject({
-        quiet_hours: {
-          enabled: true,
-          default: ['20:00', '07:00'],
-          unlock_minutes: 20,
-          monday: ['19:00', '06:30'],
-          saturday: null,
-          sunday: null
-        },
-        notifications: { chime_on_complete: false },
-        protected_branches: ['main', 'release', 'hotfix']
-      })
-      // The queue's defaults are the config file's business now.
-      expect(patch).not.toHaveProperty('concurrency')
-      expect(patch).not.toHaveProperty('max_turns')
-      expect(patch).not.toHaveProperty('max_budget_usd')
-      expect(patch).not.toHaveProperty('default_permission_mode')
-      expect(await screen.findByTestId('settings-saved')).toHaveTextContent('Saved')
+
+      await retype(user, unlock, '25')
+      await user.tab()
+      await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(2))
+      expect(fakeBridge.configSetCalls()[1].patch).toEqual({ quiet_hours: { unlock_minutes: 25 } })
+      expect(screen.queryByTestId('settings-unlock-minutes-error')).not.toBeInTheDocument()
     })
 
-    it('refuses to save an empty window or a bad number, saying why', async () => {
+    it('refuses a quiet window whose start and end are the same', async () => {
       const user = userEvent.setup()
       await openSettings(user)
 
-      await user.clear(await screen.findByTestId('settings-quiet-end'))
-      await user.type(screen.getByTestId('settings-quiet-end'), '19:00')
-      await user.clear(screen.getByTestId('settings-unlock-minutes'))
-      await user.type(screen.getByTestId('settings-unlock-minutes'), '0')
-      await user.click(screen.getByTestId('settings-save'))
+      await retype(user, await screen.findByTestId('settings-quiet-end'), '19:00')
+      await user.tab()
 
-      const alert = await screen.findByRole('alert')
-      expect(alert).toHaveTextContent('Quiet hours: start and end must differ')
-      expect(alert).toHaveTextContent('Unlock minutes must be a positive number')
+      expect(await screen.findByTestId('settings-quiet-end-error')).toHaveTextContent(
+        'Start and end must differ'
+      )
       expect(fakeBridge.configSetCalls()).toEqual([])
+    })
+
+    it("shows the daemon's refusal under the field and keeps the typed text", async () => {
+      const user = userEvent.setup()
+      fakeBridge.refuseConfigSet('summary_model: no model named "opus-9"')
+      await openSettings(user)
+      const model = await screen.findByTestId('settings-summary-model')
+
+      await retype(user, model, 'opus-9')
+      await user.tab()
+
+      expect(await screen.findByTestId('settings-summary-model-error')).toHaveTextContent(
+        'summary_model: no model named "opus-9"'
+      )
+      expect(model).toHaveValue('opus-9')
+      expect(screen.queryByTestId('settings-summary-model-saved')).not.toBeInTheDocument()
+      expect(fakeBridge.configSetCalls()).toEqual([])
+    })
+
+    it('writes one field in order, so a slow answer never lands after newer input', async () => {
+      const user = userEvent.setup()
+      await openSettings(user)
+      const poll = await screen.findByTestId('settings-tickets-poll')
+      fakeBridge.holdConfigSets()
+
+      await retype(user, poll, '10')
+      await user.tab()
+      await retype(user, poll, '12')
+      await user.tab()
+      fakeBridge.releaseConfigSets()
+
+      await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(2))
+      expect(fakeBridge.configSetCalls().map((c) => c.patch)).toEqual([
+        { jira: { poll_minutes: 10 } },
+        { jira: { poll_minutes: 12 } }
+      ])
+      expect(poll).toHaveValue(12)
     })
   })
 
@@ -151,19 +341,19 @@ describe('SettingsView', () => {
       await openSettings(user)
 
       await user.click(await screen.findByTestId('settings-quiet-enabled'))
-      await user.click(screen.getByTestId('settings-save'))
 
-      const confirm = await screen.findByTestId('settings-apply-tonight-confirm')
-      expect(within(confirm).getByRole('heading')).toHaveTextContent('Apply tonight?')
+      const confirm = await screen.findByRole('region', { name: 'Apply tonight?' })
+      expect(confirm).toHaveAttribute('data-testid', 'settings-apply-tonight-confirm')
       expect(fakeBridge.configSetCalls()).toEqual([])
       await user.click(within(confirm).getByRole('button', { name: 'Yes, tonight' }))
 
       await waitFor(() => {
         expect(fakeBridge.configSetCalls()).toEqual([
-          expect.objectContaining({ applyTonight: true })
+          { patch: { quiet_hours: { enabled: false } }, applyTonight: true }
         ])
       })
       expect(screen.queryByTestId('settings-apply-tonight-confirm')).not.toBeInTheDocument()
+      expect(await screen.findByTestId('settings-quiet-enabled-saved')).toBeInTheDocument()
     })
 
     it('saves for tomorrow on No', async () => {
@@ -181,17 +371,16 @@ describe('SettingsView', () => {
       await openSettings(user)
 
       await user.click(await screen.findByTestId('settings-quiet-enabled'))
-      await user.click(screen.getByTestId('settings-save'))
       await user.click(await screen.findByRole('button', { name: 'No, from tomorrow' }))
 
       await waitFor(() => {
         expect(fakeBridge.configSetCalls()).toEqual([
-          expect.objectContaining({ applyTonight: false })
+          { patch: { quiet_hours: { enabled: false } }, applyTonight: false }
         ])
       })
     })
 
-    it("does not ask when the change leaves tonight's window as long", async () => {
+    it("does not ask for a change outside quiet hours, even during tonight's window", async () => {
       const user = userEvent.setup()
       const t = tonight()
       fakeBridge.setConfig({
@@ -206,50 +395,44 @@ describe('SettingsView', () => {
       await openSettings(user)
 
       await user.click(await screen.findByTestId('settings-chime-complete'))
-      await user.click(screen.getByTestId('settings-save'))
 
-      await waitFor(() => {
-        expect(fakeBridge.configSetCalls()).toHaveLength(1)
-      })
+      await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
       expect(screen.queryByTestId('settings-apply-tonight-confirm')).not.toBeInTheDocument()
     })
   })
 })
 
 describe('SettingsView new workspaces', () => {
-  it('starts Claude on the brief by default, and saves start_prompt removed', async () => {
+  it('starts Claude on the brief by default', async () => {
     const user = userEvent.setup()
     await openSettings(user)
 
     expect(await screen.findByTestId('settings-start-prompt-enabled')).not.toBeChecked()
     expect(screen.queryByTestId('settings-workspace-prompt')).not.toBeInTheDocument()
     expect(screen.getByText('Claude starts on the brief itself.')).toBeInTheDocument()
-    await user.click(screen.getByTestId('settings-save'))
-
-    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
-    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({ start_prompt: null })
   })
 
-  it('reveals the prompt, prefilled with a suggestion, when turned on, and saves it', async () => {
+  it('writes the suggested prompt when turned on, then an edit to it on blur', async () => {
     const user = userEvent.setup()
     await openSettings(user)
 
     await user.click(await screen.findByTestId('settings-start-prompt-enabled'))
     const prompt = screen.getByTestId('settings-workspace-prompt')
-    expect(prompt).toHaveValue(
+    const suggestion =
       'Read .que/brief.md. Restate the goal, read the relevant code, and propose a plan before editing anything.'
-    )
-    await user.clear(prompt)
-    await user.type(prompt, 'Read .que/brief.md and ask before editing.')
-    await user.click(screen.getByTestId('settings-save'))
-
+    expect(prompt).toHaveValue(suggestion)
     await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
-    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({
-      start_prompt: 'Read .que/brief.md and ask before editing.'
-    })
+    await retype(user, prompt, 'Read .que/brief.md and ask before editing.')
+    await user.tab()
+
+    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(2))
+    expect(fakeBridge.configSetCalls().map((c) => c.patch)).toEqual([
+      { start_prompt: suggestion },
+      { start_prompt: 'Read .que/brief.md and ask before editing.' }
+    ])
   })
 
-  it('loads a configured prompt turned on, and turning it off clears it', async () => {
+  it('loads a configured prompt turned on, and turning it off removes start_prompt', async () => {
     const user = userEvent.setup()
     fakeBridge.setConfig({ startPrompt: 'Read .que/brief.md, then plan.' })
     await openSettings(user)
@@ -260,21 +443,24 @@ describe('SettingsView new workspaces', () => {
       'Read .que/brief.md, then plan.'
     )
     await user.click(toggle)
-    await user.click(screen.getByTestId('settings-save'))
 
-    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
-    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({ start_prompt: null })
+    await waitFor(() => {
+      expect(fakeBridge.configSetCalls()).toEqual([
+        { patch: { start_prompt: null }, applyTonight: false }
+      ])
+    })
+    expect(await screen.findByTestId('settings-start-prompt-enabled-saved')).toBeInTheDocument()
   })
 
   it('refuses an empty start prompt while it is turned on', async () => {
     const user = userEvent.setup()
+    fakeBridge.setConfig({ startPrompt: 'Read .que/brief.md, then plan.' })
     await openSettings(user)
 
-    await user.click(await screen.findByTestId('settings-start-prompt-enabled'))
-    await user.clear(screen.getByTestId('settings-workspace-prompt'))
-    await user.click(screen.getByTestId('settings-save'))
+    await user.clear(await screen.findByTestId('settings-workspace-prompt'))
+    await user.tab()
 
-    expect(await screen.findByTestId('settings-error')).toHaveTextContent(
+    expect(await screen.findByTestId('settings-workspace-prompt-error')).toHaveTextContent(
       'The workspace start prompt cannot be empty'
     )
     expect(fakeBridge.configSetCalls()).toEqual([])
@@ -282,7 +468,7 @@ describe('SettingsView new workspaces', () => {
 })
 
 describe('SettingsView tickets', () => {
-  it('loads the filter, interval, prompt and learned projects, and saves the jira patch', async () => {
+  it('loads the filter, interval, prompt and learned projects', async () => {
     const user = userEvent.setup()
     fakeBridge.setConfig({
       jira: {
@@ -303,34 +489,26 @@ describe('SettingsView tickets', () => {
     const learned = screen.getByTestId('settings-tickets-projects')
     expect(learned).toHaveTextContent('APP → uploader')
     expect(learned).toHaveTextContent('WEB → site')
-
-    await user.clear(screen.getByTestId('settings-tickets-poll'))
-    await user.type(screen.getByTestId('settings-tickets-poll'), '10')
-    await user.click(screen.getByTestId('settings-save'))
-
-    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
-    const patch = fakeBridge.configSetCalls()[0].patch
-    expect(patch).toMatchObject({
-      jira: { jql: 'assignee = currentUser()', poll_minutes: 10, start_prompt: 'Plan first.' }
-    })
-    expect(patch.jira).not.toHaveProperty('projects')
   })
 
-  it('saves the site as null when blank and as the trimmed host otherwise', async () => {
+  it('writes the site as the trimmed host, and as null when cleared', async () => {
     const user = userEvent.setup()
     await openSettings(user)
     const site = await screen.findByTestId('settings-jira-site')
     expect(site).toHaveValue('')
     expect(site).toHaveAttribute('placeholder', 'team.example.net')
 
-    await user.click(screen.getByTestId('settings-save'))
-    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
-    expect(fakeBridge.configSetCalls()[0].patch.jira).toMatchObject({ site: null })
-
     await user.type(site, '  team.example.net ')
-    await user.click(screen.getByTestId('settings-save'))
+    await user.tab()
+    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
+    await user.clear(site)
+    await user.tab()
+
     await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(2))
-    expect(fakeBridge.configSetCalls()[1].patch.jira).toMatchObject({ site: 'team.example.net' })
+    expect(fakeBridge.configSetCalls().map((c) => c.patch)).toEqual([
+      { jira: { site: 'team.example.net' } },
+      { jira: { site: null } }
+    ])
   })
 
   it('says when no projects are learned, and refuses an empty prompt', async () => {
@@ -339,9 +517,9 @@ describe('SettingsView tickets', () => {
 
     expect(await screen.findByText('No projects learned yet.')).toBeInTheDocument()
     await user.clear(screen.getByTestId('settings-tickets-prompt'))
-    await user.click(screen.getByTestId('settings-save'))
+    await user.tab()
 
-    expect(await screen.findByTestId('settings-error')).toHaveTextContent(
+    expect(await screen.findByTestId('settings-tickets-prompt-error')).toHaveTextContent(
       'The start prompt cannot be empty'
     )
     expect(fakeBridge.configSetCalls()).toEqual([])
@@ -349,7 +527,7 @@ describe('SettingsView tickets', () => {
 })
 
 describe('SettingsView instructions', () => {
-  it('loads the file the config names into the editor and saves edits through the bridge', async () => {
+  it('loads the file the config names into the editor and saves the content on blur', async () => {
     const user = userEvent.setup()
     fakeBridge.setConfig(
       { instructionsFile: '/Users/dev/notes/delegation.md' },
@@ -367,37 +545,58 @@ describe('SettingsView instructions', () => {
     })
     expect(content).toBeEnabled()
     expect(screen.queryByTestId('settings-instructions-unset')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Save instructions' })).not.toBeInTheDocument()
 
     await user.type(content, 'Run tests before a commit.')
-    await user.click(screen.getByRole('button', { name: 'Save instructions' }))
+    expect(fakeBridge.instructionsSetCalls()).toEqual([])
+    await user.tab()
 
-    expect(await screen.findByTestId('settings-instructions-saved')).toHaveTextContent('Saved')
+    expect(await screen.findByTestId('settings-instructions-content-saved')).toHaveTextContent(
+      'Saved'
+    )
     expect(fakeBridge.instructionsSetCalls()).toEqual([
       'Delegate broad searches to a smaller model.\nRun tests before a commit.'
     ])
     expect(fakeBridge.configSetCalls()).toEqual([])
   })
 
-  it('disables the editor with a hint until a file is set, then saves the path as a config patch', async () => {
+  it('reverts the content on Escape', async () => {
+    const user = userEvent.setup()
+    fakeBridge.setConfig({ instructionsFile: '/Users/dev/notes/delegation.md' })
+    fakeBridge.seedInstructions('Delegate broad searches.')
+    await openSettings(user)
+    const content = await screen.findByTestId('settings-instructions-content')
+    await waitFor(() => expect(content).toHaveValue('Delegate broad searches.'))
+
+    await user.type(content, ' And more.')
+    await user.keyboard('{Escape}')
+
+    expect(content).toHaveValue('Delegate broad searches.')
+    await user.tab()
+    expect(fakeBridge.instructionsSetCalls()).toEqual([])
+  })
+
+  it('disables the editor with a hint until a file is set, then writes the path on blur', async () => {
     const user = userEvent.setup()
     await openSettings(user)
 
     const content = await screen.findByTestId('settings-instructions-content')
     expect(content).toBeDisabled()
     expect(screen.getByTestId('settings-instructions-unset')).toHaveTextContent(
-      'Set a file above and save to edit the instructions here.'
+      'Set a file above to edit the instructions here.'
     )
-    expect(screen.getByRole('button', { name: 'Save instructions' })).toBeDisabled()
 
     await user.type(screen.getByTestId('settings-instructions-file'), '~/notes/delegation.md')
-    await user.click(screen.getByTestId('settings-save'))
+    await user.tab()
 
-    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
-    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({
-      instructions_file: '~/notes/delegation.md'
+    await waitFor(() => {
+      expect(fakeBridge.configSetCalls()).toEqual([
+        { patch: { instructions_file: '~/notes/delegation.md' }, applyTonight: false }
+      ])
     })
     await waitFor(() => expect(content).toBeEnabled())
     expect(screen.queryByTestId('settings-instructions-unset')).not.toBeInTheDocument()
+    expect(screen.getByTestId('settings-instructions-file-saved')).toBeInTheDocument()
   })
 
   it('refuses a relative path, saying why', async () => {
@@ -405,9 +604,9 @@ describe('SettingsView instructions', () => {
     await openSettings(user)
 
     await user.type(await screen.findByTestId('settings-instructions-file'), 'notes/delegation.md')
-    await user.click(screen.getByTestId('settings-save'))
+    await user.keyboard('{Enter}')
 
-    expect(await screen.findByTestId('settings-error')).toHaveTextContent(
+    expect(await screen.findByTestId('settings-instructions-file-error')).toHaveTextContent(
       'The instructions file must be an absolute path or start with ~'
     )
     expect(fakeBridge.configSetCalls()).toEqual([])
@@ -422,10 +621,13 @@ describe('SettingsView instructions', () => {
     await openSettings(user)
 
     await user.clear(await screen.findByTestId('settings-instructions-file'))
-    await user.click(screen.getByTestId('settings-save'))
+    await user.tab()
 
-    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
-    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({ instructions_file: null })
+    await waitFor(() => {
+      expect(fakeBridge.configSetCalls()).toEqual([
+        { patch: { instructions_file: null }, applyTonight: false }
+      ])
+    })
     await waitFor(() => {
       expect(screen.getByTestId('settings-instructions-content')).toBeDisabled()
     })
@@ -433,7 +635,7 @@ describe('SettingsView instructions', () => {
 })
 
 describe('SettingsView sidebar titles', () => {
-  it('loads the summary settings and saves changes as the top-level keys', async () => {
+  it('loads the summary settings and writes each control as its own top-level key', async () => {
     const user = userEvent.setup()
     fakeBridge.setConfig({ summaries: true, summaryModel: 'haiku', summaryIntervalMinutes: 5 })
     await openSettings(user)
@@ -446,32 +648,36 @@ describe('SettingsView sidebar titles', () => {
     expect(screen.getByLabelText(/At most every \(minutes\)/)).toHaveValue(5)
 
     await user.click(toggle)
-    await user.clear(screen.getByLabelText('Model'))
-    await user.type(screen.getByLabelText('Model'), 'sonnet')
-    await user.clear(screen.getByLabelText(/At most every \(minutes\)/))
-    await user.type(screen.getByLabelText(/At most every \(minutes\)/), '15')
-    await user.click(screen.getByTestId('settings-save'))
-
     await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
-    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({
-      summaries: false,
-      summary_model: 'sonnet',
-      summary_interval_minutes: 15
-    })
+    await retype(user, screen.getByTestId('settings-summary-model'), ' sonnet ')
+    await user.tab()
+    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(2))
+    await retype(user, screen.getByTestId('settings-summary-interval'), '15')
+    await user.tab()
+
+    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(3))
+    expect(fakeBridge.configSetCalls().map((c) => c.patch)).toEqual([
+      { summaries: false },
+      { summary_model: 'sonnet' },
+      { summary_interval_minutes: 15 }
+    ])
   })
 
   it('refuses an empty model or an interval under a minute, saying why', async () => {
     const user = userEvent.setup()
     await openSettings(user)
 
-    await user.clear(await screen.findByLabelText('Model'))
-    await user.clear(screen.getByLabelText(/At most every \(minutes\)/))
-    await user.type(screen.getByLabelText(/At most every \(minutes\)/), '0.5')
-    await user.click(screen.getByTestId('settings-save'))
+    await user.clear(await screen.findByTestId('settings-summary-model'))
+    await user.tab()
+    await retype(user, screen.getByTestId('settings-summary-interval'), '0.5')
+    await user.tab()
 
-    const error = await screen.findByTestId('settings-error')
-    expect(error).toHaveTextContent('The summary model cannot be empty')
-    expect(error).toHaveTextContent('Summary minutes must be a whole number of at least 1')
+    expect(await screen.findByTestId('settings-summary-model-error')).toHaveTextContent(
+      'The summary model cannot be empty'
+    )
+    expect(await screen.findByTestId('settings-summary-interval-error')).toHaveTextContent(
+      'Summary minutes must be a whole number of at least 1'
+    )
     expect(fakeBridge.configSetCalls()).toEqual([])
   })
 })

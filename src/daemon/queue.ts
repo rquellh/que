@@ -5,6 +5,7 @@
 // through the pure task machine; this module persists it and reacts.
 import { type ChildProcess, spawn } from 'node:child_process'
 import { performance } from 'node:perf_hooks'
+import { titleOf } from '../shared/brief'
 import type { UserConfig } from '../shared/config'
 import type { QuePaths } from '../shared/paths'
 import type {
@@ -47,13 +48,6 @@ export function detectWake(
   thresholdMs = WAKE_THRESHOLD_MS
 ): boolean {
   return wall - prevWall - (mono - prevMono) > thresholdMs
-}
-
-/** The default title: the brief's first non-empty line, at most 80 characters. */
-export function defaultTitle(brief: string): string {
-  const first = brief.split('\n').find((l) => l.trim() !== '') ?? ''
-  const line = first.trim()
-  return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line
 }
 
 export interface TaskQueueOptions {
@@ -303,7 +297,7 @@ export class TaskQueue {
     }
     positive(p.maxTurns, 'maxTurns', true)
     positive(p.maxBudgetUsd, 'maxBudgetUsd', false)
-    const title = (p.title?.trim() || defaultTitle(p.brief)).slice(0, 200)
+    const title = (p.title?.trim() || titleOf(p.brief)).slice(0, 200)
     const config = this.o.config()
     const now = new Date(this.now()).toISOString()
     const task: Task = {

@@ -33,6 +33,10 @@ export interface Workspace {
   prUrl: string | null
   /** The pull request for this workspace's branch, as last seen on GitHub; null when there is none. */
   pr: PullRequest | null
+  /** What the work is, in a line (shown instead of the name); absent for a workspace made from a name. */
+  title?: string
+  /** The description the workspace was made from (written to `.que/brief.md`). */
+  brief?: string
 }
 
 export type CheckState = 'pending' | 'passing' | 'failing' | 'skipped'
@@ -284,6 +288,8 @@ export interface UserConfig {
   quietHours: QuietHoursConfig
   notifications: NotificationsConfig
   jira: JiraConfig
+  /** What claude starts on in a workspace made from a brief; empty (the default) means the brief itself. */
+  startPrompt: string
 }
 
 /** A newer que release, found by the app's daily update check. */

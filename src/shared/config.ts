@@ -75,7 +75,9 @@ export function defaultConfig(env: ConfigEnv): UserConfig {
     protectedBranches: ['main', 'master', 'release'],
     quietHours: defaultQuietHours(),
     notifications: defaultNotifications(),
-    jira: defaultJira()
+    jira: defaultJira(),
+    // Empty: claude starts on the brief itself.
+    startPrompt: ''
   }
 }
 
@@ -338,6 +340,13 @@ export function parseConfig(text: string, env: ConfigEnv): ConfigResult<UserConf
   config.quietHours = parseQuietHours(t.quiet_hours, errors)
   config.notifications = parseNotifications(t.notifications, errors)
   config.jira = parseJira(t.jira, errors)
+  const startPrompt = t.start_prompt
+  if (startPrompt !== undefined) {
+    // A blank prompt is off, like an unset one.
+    if (typeof startPrompt !== 'string') {
+      errors.push({ key: 'start_prompt', message: 'must be a string' })
+    } else config.startPrompt = startPrompt.trim() === '' ? '' : startPrompt
+  }
 
   if (t.repos !== undefined) {
     if (typeof t.repos !== 'object' || t.repos === null || Array.isArray(t.repos)) {

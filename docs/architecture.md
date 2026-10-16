@@ -197,6 +197,23 @@ workspace is typed `claude '<jira.start_prompt>'`. A second start reuses the
 workspace. A loose session instead gets the brief at `<QUE_HOME>/tickets/<KEY>.md`
 and a terminal in the home directory. Starting is refused in quiet hours.
 
+A workspace can also start from a brief. `workspace.create` without a `name`
+draws a random three-word name (`adjective-adjective-noun`, `names.ts`) for the
+workspace, branch and folder, drawing again on a clash up to 50 times; an
+explicit name is refused on a clash instead. The new-workspace dialog prefills
+such a name and lets the user draw another or type their own, which it sends as
+the explicit name. Tasks get random names too; tickets pass their own name. The
+title is the given one, else the brief's first line (`brief.ts`), and is what the
+sidebar shows; the brief goes verbatim to `<worktree>/.que/brief.md`.
+`workspace.start` opens the workspace's first terminal when it has none, answers
+with it, and once setup has ended types the command that starts Claude. By
+default the brief is the first prompt: `claude "$(cat '<worktree>/.que/brief.md')"`,
+so the shell hands it over verbatim. With `start_prompt` set, that text is sent
+instead (`claude '<start_prompt>'`; it can tell Claude to read `.que/brief.md`),
+and a workspace without a brief gets a bare `claude`. `workspace.rename`
+changes the title and, for a branch with no `origin/<branch>`, can rename the
+branch to a name the user gives; the folder keeps its name.
+
 ## The task machine
 
 An overnight task moves `queued → preparing → running → finishing → done`, and

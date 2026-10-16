@@ -236,33 +236,50 @@ export function registerWorkspaceCommands(program: Command): void {
     )
 
   program
-    .command('work <name>')
-    .description('create a workspace (git worktree) and print its path')
+    .command('work [brief]')
+    .description(
+      'create a workspace (git worktree) from a brief and print its path; the first line of the brief is its title, and its branch and folder get a random three-word name unless --name is given'
+    )
     .requiredOption('-r, --repo <repo>', 'repository path or configured repo name')
+    .option(
+      '--name <name>',
+      'name the workspace, branch and folder yourself (default: random words)'
+    )
     .option('--base <ref>', 'base ref (default: origin/<default branch>)')
     .option('--open', 'open the workspace with `code -n`')
     .option('--json', 'print the workspace as JSON')
-    .action((name: string, opts: { repo: string; base?: string; open?: boolean; json?: boolean }) =>
-      withClient(async (c) => {
-        const repo = resolveRepo(opts.repo)
-        const p = await c.request('project.add', { path: repo.path, name: repo.name })
-        const seen: WorkspaceStatusEvent[] = []
-        c.on('workspace.status', (e) => seen.push(e))
-        const created = await c.request('workspace.create', {
-          projectId: p.id,
-          name,
-          baseRef: opts.base
-        })
-        const ws = await waitForSetup(c, created, seen)
-        if (opts.json) console.log(JSON.stringify(ws, null, 2))
-        else console.log(ws.path)
-        if (ws.status === 'stuck') {
-          const log = join(quePaths().workspaceLogsDir, `${ws.id}-setup.log`)
-          console.error(`que: setup failed for ${ws.name}; see ${log}`)
-          process.exitCode = 1
+    .action(
+      (
+        brief: string | undefined,
+        opts: { repo: string; name?: string; base?: string; open?: boolean; json?: boolean }
+      ) => {
+        if (!brief?.trim() && opts.name === undefined) {
+          console.error('que: give a brief (what you are doing) or --name')
+          process.exitCode = 2
+          return
         }
-        if (opts.open) await openInEditor(ws.path)
-      })
+        return withClient(async (c) => {
+          const repo = resolveRepo(opts.repo)
+          const p = await c.request('project.add', { path: repo.path, name: repo.name })
+          const seen: WorkspaceStatusEvent[] = []
+          c.on('workspace.status', (e) => seen.push(e))
+          const created = await c.request('workspace.create', {
+            projectId: p.id,
+            ...(opts.name !== undefined ? { name: opts.name } : {}),
+            ...(brief?.trim() ? { brief } : {}),
+            baseRef: opts.base
+          })
+          const ws = await waitForSetup(c, created, seen)
+          if (opts.json) console.log(JSON.stringify(ws, null, 2))
+          else console.log(ws.path)
+          if (ws.status === 'stuck') {
+            const log = join(quePaths().workspaceLogsDir, `${ws.id}-setup.log`)
+            console.error(`que: setup failed for ${ws.name}; see ${log}`)
+            process.exitCode = 1
+          }
+          if (opts.open) await openInEditor(ws.path)
+        })
+      }
     )
 
   const ws = program.command('ws').description('manage workspaces')
@@ -278,10 +295,10 @@ export function registerWorkspaceCommands(program: Command): void {
         if (list.length === 0) return console.log('no workspaces')
         const projects = await c.request('project.list')
         printTable(
-          ['ID', 'NAME', 'PROJECT', 'BRANCH', 'STATUS', 'PATH'],
+          ['ID', 'WORKSPACE', 'PROJECT', 'BRANCH', 'STATUS', 'PATH'],
           list.map((w) => [
             w.id,
-            w.name,
+            w.title ?? w.name,
             projectName(projects, w.projectId),
             w.branch,
             w.status,

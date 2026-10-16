@@ -94,7 +94,14 @@ describe('que work and que ws', () => {
   it('creates a workspace from a repo path, waits for setup, and prints its path', async () => {
     const repo = makeTempRepo(daemon.home, { queToml: 'setup = "printf ok > .setup-done"\n' })
 
-    const r = await runCli('work', 'APP-1432 retry logic', '-r', repo)
+    const r = await runCli(
+      'work',
+      'APP-1432 retry logic',
+      '--name',
+      'APP-1432 retry logic',
+      '-r',
+      repo
+    )
 
     expect(r.code).toBe(0)
     const path = join(daemon.home, 'worktrees', 'uploader', 'app-1432-retry-logic')
@@ -102,14 +109,39 @@ describe('que work and que ws', () => {
     expect(fs.readFileSync(join(path, '.setup-done'), 'utf8')).toBe('ok')
     expect(gitIn(path, 'rev-parse', '--abbrev-ref', 'HEAD')).toBe('app-1432-retry-logic')
     const listed = JSON.parse((await runCli('ws', 'list', '--json')).stdout) as Workspace[]
-    expect(listed).toEqual([expect.objectContaining({ path, status: 'idle' })])
+    expect(listed).toEqual([
+      expect.objectContaining({ path, status: 'idle', title: 'APP-1432 retry logic' })
+    ])
+  }, 30_000)
+
+  it('takes a multi-line brief, or a --name, and refuses neither', async () => {
+    const repo = makeTempRepo(daemon.home)
+    const brief = 'Raise the upload timeout\n\nThe upload test times out on slow runners.'
+
+    const fromBrief = await runCli('work', brief, '-r', repo, '--json')
+    const named = await runCli('work', brief, '--name', 'APP-1490 timeout', '-r', repo, '--json')
+    const neither = await runCli('work', '-r', repo)
+
+    expect(JSON.parse(fromBrief.stdout)).toMatchObject({
+      name: expect.stringMatching(/^[a-z]+-[a-z]+-[a-z]+$/),
+      title: 'Raise the upload timeout',
+      brief
+    })
+    expect(JSON.parse(named.stdout)).toMatchObject({
+      name: 'app-1490-timeout',
+      title: 'Raise the upload timeout'
+    })
+    expect(neither.code).toBe(2)
+    expect(neither.stderr).toContain('give a brief (what you are doing) or --name')
+    const table = (await runCli('ws', 'list')).stdout
+    expect(table).toContain('Raise the upload timeout')
   }, 30_000)
 
   it('resolves -r through the config registry and fails when setup fails', async () => {
     const repo = makeTempRepo(daemon.home, { queToml: 'setup = "exit 4"\n' })
     fs.writeFileSync(daemon.configPath, withQuietOff(`[repos.uploader-api]\npath = "${repo}"\n`))
 
-    const r = await runCli('work', 'app-1433-broken-setup', '-r', 'uploader-api')
+    const r = await runCli('work', '--name', 'app-1433-broken-setup', '-r', 'uploader-api')
 
     expect(r.code).toBe(1)
     expect(r.stderr).toContain('setup failed for app-1433-broken-setup')
@@ -119,7 +151,7 @@ describe('que work and que ws', () => {
 
   it('removes a workspace by name and deletes its branch', async () => {
     const repo = makeTempRepo(daemon.home)
-    await runCli('work', 'app-1470-cleanup', '-r', repo)
+    await runCli('work', '--name', 'app-1470-cleanup', '-r', repo)
 
     const r = await runCli('ws', 'remove', 'app-1470-cleanup', '--delete-branch')
 
@@ -131,7 +163,7 @@ describe('que work and que ws', () => {
 
   it('opens a workspace with code -n', async () => {
     const repo = makeTempRepo(daemon.home)
-    const path = (await runCli('work', 'app-1480-editor', '-r', repo)).stdout.trim()
+    const path = (await runCli('work', '--name', 'app-1480-editor', '-r', repo)).stdout.trim()
 
     const r = await runCli('open', 'app-1480-editor')
 

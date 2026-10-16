@@ -163,8 +163,15 @@ describe('starting a ticket', () => {
     const ws = r.workspace
     expect(ws).toMatchObject({
       name: 'app-1432-add-retry-logic-to-the-uploader',
+      title: 'APP-1432 Add retry logic to the uploader',
       projectId: project.id
     })
+    expect(ws.brief).toContain('# APP-1432 Add retry logic to the uploader')
+    const briefFile = fs.readFileSync(join(ws.path, '.que', 'brief.md'), 'utf8')
+    expect(briefFile.startsWith('# APP-1432 Add retry logic to the uploader\n\nhttps://')).toBe(
+      true
+    )
+    expect(briefFile.match(/^# /gm)).toHaveLength(1)
 
     const brief = fs.readFileSync(join(ws.path, '.que', 'ticket.md'), 'utf8')
     expect(brief).toContain('# APP-1432 Add retry logic to the uploader')

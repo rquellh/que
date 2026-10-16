@@ -120,7 +120,9 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE tickets ADD COLUMN parent_key TEXT;`,
   `ALTER TABLE tickets ADD COLUMN level TEXT NOT NULL DEFAULT 'standard';`,
   `ALTER TABLE tickets ADD COLUMN assigned INTEGER NOT NULL DEFAULT 1;`,
-  `ALTER TABLE tickets ADD COLUMN parent_checked_at TEXT;`
+  `ALTER TABLE tickets ADD COLUMN parent_checked_at TEXT;`,
+  `ALTER TABLE workspaces ADD COLUMN title TEXT;
+   ALTER TABLE workspaces ADD COLUMN brief TEXT;`
 ]
 
 const STATUS_LOG_RETENTION_MS = 30 * 24 * 3_600_000
@@ -215,6 +217,8 @@ interface WorkspaceRow {
   archived_at: string | null
   pr_url: string | null
   pr_json: string | null
+  title: string | null
+  brief: string | null
 }
 
 interface TaskRow {
@@ -352,7 +356,9 @@ function toWorkspace(r: WorkspaceRow): Workspace {
     createdAt: r.created_at,
     archivedAt: r.archived_at,
     prUrl: r.pr_url ?? null,
-    pr: parsePr(r.pr_json)
+    pr: parsePr(r.pr_json),
+    ...(r.title ? { title: r.title } : {}),
+    ...(r.brief ? { brief: r.brief } : {})
   }
 }
 
@@ -451,8 +457,9 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO workspaces (id, project_id, name, branch, path, base_ref, status, status_reason,
-           status_at, last_activity_at, session_id, created_at, archived_at, pr_url, pr_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           status_at, last_activity_at, session_id, created_at, archived_at, pr_url, pr_json,
+           title, brief)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         w.id,
@@ -469,8 +476,18 @@ export class Store {
         w.createdAt,
         w.archivedAt,
         w.prUrl,
-        w.pr ? JSON.stringify(w.pr) : null
+        w.pr ? JSON.stringify(w.pr) : null,
+        w.title ?? null,
+        w.brief ?? null
       )
+  }
+
+  setWorkspaceTitle(id: string, title: string): void {
+    this.db.prepare('UPDATE workspaces SET title = ? WHERE id = ?').run(title, id)
+  }
+
+  setWorkspaceBranch(id: string, branch: string): void {
+    this.db.prepare('UPDATE workspaces SET branch = ? WHERE id = ?').run(branch, id)
   }
 
   getWorkspace(id: string): Workspace | undefined {

@@ -216,6 +216,71 @@ describe('SettingsView', () => {
   })
 })
 
+describe('SettingsView new workspaces', () => {
+  it('starts Claude on the brief by default, and saves start_prompt removed', async () => {
+    const user = userEvent.setup()
+    await openSettings(user)
+
+    expect(await screen.findByTestId('settings-start-prompt-enabled')).not.toBeChecked()
+    expect(screen.queryByTestId('settings-workspace-prompt')).not.toBeInTheDocument()
+    expect(screen.getByText('Claude starts on the brief itself.')).toBeInTheDocument()
+    await user.click(screen.getByTestId('settings-save'))
+
+    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
+    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({ start_prompt: null })
+  })
+
+  it('reveals the prompt, prefilled with a suggestion, when turned on, and saves it', async () => {
+    const user = userEvent.setup()
+    await openSettings(user)
+
+    await user.click(await screen.findByTestId('settings-start-prompt-enabled'))
+    const prompt = screen.getByTestId('settings-workspace-prompt')
+    expect(prompt).toHaveValue(
+      'Read .que/brief.md. Restate the goal, read the relevant code, and propose a plan before editing anything.'
+    )
+    await user.clear(prompt)
+    await user.type(prompt, 'Read .que/brief.md and ask before editing.')
+    await user.click(screen.getByTestId('settings-save'))
+
+    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
+    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({
+      start_prompt: 'Read .que/brief.md and ask before editing.'
+    })
+  })
+
+  it('loads a configured prompt turned on, and turning it off clears it', async () => {
+    const user = userEvent.setup()
+    fakeBridge.setConfig({ startPrompt: 'Read .que/brief.md, then plan.' })
+    await openSettings(user)
+
+    const toggle = await screen.findByTestId('settings-start-prompt-enabled')
+    expect(toggle).toBeChecked()
+    expect(screen.getByTestId('settings-workspace-prompt')).toHaveValue(
+      'Read .que/brief.md, then plan.'
+    )
+    await user.click(toggle)
+    await user.click(screen.getByTestId('settings-save'))
+
+    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
+    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({ start_prompt: null })
+  })
+
+  it('refuses an empty start prompt while it is turned on', async () => {
+    const user = userEvent.setup()
+    await openSettings(user)
+
+    await user.click(await screen.findByTestId('settings-start-prompt-enabled'))
+    await user.clear(screen.getByTestId('settings-workspace-prompt'))
+    await user.click(screen.getByTestId('settings-save'))
+
+    expect(await screen.findByTestId('settings-error')).toHaveTextContent(
+      'The workspace start prompt cannot be empty'
+    )
+    expect(fakeBridge.configSetCalls()).toEqual([])
+  })
+})
+
 describe('SettingsView tickets', () => {
   it('loads the filter, interval, prompt and learned projects, and saves the jira patch', async () => {
     const user = userEvent.setup()

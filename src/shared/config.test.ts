@@ -36,7 +36,8 @@ describe('parseConfig', () => {
           unlockMinutes: 20
         },
         notifications: { chimeOnComplete: true, chimeOnNeedsInput: false, morningSummary: false },
-        jira: defaultJira()
+        jira: defaultJira(),
+        startPrompt: ''
       }
     })
   })
@@ -53,6 +54,7 @@ max_budget_usd = 12.5
 default_permission_mode = "plan"
 allow_bypass_permissions = true
 protected_branches = ["main", "production"]
+start_prompt = "Read .que/brief.md and ask before editing."
 
 [repos.uploader]
 path = "/Users/dev/code/uploader"
@@ -83,7 +85,8 @@ path = "/Users/dev/code/api"
         protectedBranches: ['main', 'production'],
         quietHours: expect.objectContaining({ enabled: true }),
         notifications: expect.objectContaining({ chimeOnComplete: true }),
-        jira: defaultJira()
+        jira: defaultJira(),
+        startPrompt: 'Read .que/brief.md and ask before editing.'
       }
     })
   })
@@ -176,6 +179,7 @@ default_branch = "main"
 default_permission_mode = "yolo"
 allow_bypass_permissions = "yes"
 protected_branches = "main"
+start_prompt = 3
 `,
       env
     )
@@ -189,7 +193,8 @@ protected_branches = "main"
           message: 'must be one of default, acceptEdits, plan, bypassPermissions, dontAsk, auto'
         },
         { key: 'allow_bypass_permissions', message: 'must be true or false' },
-        { key: 'protected_branches', message: 'must be a list of strings' }
+        { key: 'protected_branches', message: 'must be a list of strings' },
+        { key: 'start_prompt', message: 'must be a string' }
       ]
     })
   })
@@ -236,6 +241,17 @@ protected_branches = "main"
       const removed = mergeConfigPatch(merged, parseConfigAssignment('instructions_file=null'))
       expect(removed).toEqual({ concurrency: 3 })
     })
+  })
+
+  it('reads an empty or blank start_prompt as off, and round-trips it', () => {
+    for (const text of ['start_prompt = ""\n', 'start_prompt = "  "\n']) {
+      const r = parseConfig(text, env)
+      expect(r.ok && r.config.startPrompt).toBe('')
+    }
+    const set = parseConfig('start_prompt = "Read .que/brief.md first."\n', env)
+    expect(set.ok && set.config.startPrompt).toBe('Read .que/brief.md first.')
+    const again = parseConfig(stringifyConfig({ start_prompt: '' }), env)
+    expect(again.ok && again.config.startPrompt).toBe('')
   })
 
   it('reports a TOML syntax error without a key', () => {

@@ -168,6 +168,7 @@ export type DialogState =
   | { kind: 'remove-project'; projectId: string }
   | { kind: 'create-pr'; workspaceId: string }
   | { kind: 'remove-workspace'; workspaceId: string }
+  | { kind: 'rename-workspace'; workspaceId: string }
   | { kind: 'start-ticket'; key: string; projects: Project[] }
 
 export interface QueState {
@@ -1254,11 +1255,57 @@ export class QueStore {
     }
   }
 
-  /** Creates a workspace and shows it (which opens its first terminal). Throws for the dialog. */
-  async createWorkspace(p: { projectId: string; name: string; baseRef?: string }): Promise<void> {
-    const ws = await this.api.workspace.create(p)
+  /**
+   * Creates a workspace and shows it, which opens its first terminal. With `start`, the daemon
+   * opens that terminal and types claude on the start prompt into it once setup is done; its tab
+   * is added before the view shows, so the view does not open a second one. Throws for the dialog.
+   */
+  async createWorkspace(p: {
+    projectId: string
+    brief: string
+    /** The workspace, branch and folder name. */
+    name: string
+    baseRef?: string
+    start?: boolean
+  }): Promise<void> {
+    const { start, ...params } = p
+    const ws = await this.api.workspace.create(params)
     this.upsertWorkspace(ws)
+    if (!start) {
+      this.showTerminals(ws.id)
+      return
+    }
+    // The workspace exists now: a failure to start goes to the banner, not back to the dialog.
+    let terminalId: string
+    try {
+      ;({ terminalId } = await this.api.workspace.start({
+        id: ws.id,
+        cols: DEFAULT_COLS,
+        rows: DEFAULT_ROWS
+      }))
+    } catch (err) {
+      this.fail(err)
+      this.showTerminals(ws.id)
+      return
+    }
+    await this.addTerminal(terminalId)
     this.showTerminals(ws.id)
+    this.selectTerminal(ws.id, terminalId)
+  }
+
+  /** Whether a rename may also rename the workspace's branch (it was never pushed). */
+  async canRenameBranch(id: string): Promise<boolean> {
+    return (await this.api.workspace.canRenameBranch({ id })).allowed
+  }
+
+  /** Sets a workspace's title (and branch, when asked). Throws for the dialog. */
+  async renameWorkspace(id: string, title: string, branch?: string): Promise<void> {
+    const ws = await this.api.workspace.rename({
+      id,
+      title,
+      ...(branch !== undefined ? { branch } : {})
+    })
+    this.upsertWorkspace(ws)
   }
 
   /** Removes the project and, with it, its workspaces (terminals killed, worktrees deleted). */

@@ -3,7 +3,8 @@
 // input never reaches a shell string.
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import fs from 'node:fs'
-import { basename, dirname, isAbsolute, join, normalize } from 'node:path'
+import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path'
+import { titleOf } from '../shared/brief'
 import {
   formatConfigErrors,
   loadConfig,
@@ -16,8 +17,10 @@ import type { QuePaths } from '../shared/paths'
 import type {
   ProjectAddParams,
   WorkspaceCreateParams,
-  WorkspaceRemoveParams
+  WorkspaceRemoveParams,
+  WorkspaceRenameParams
 } from '../shared/protocol'
+import { randomWorkspaceName } from '../shared/names'
 import { workspaceSlug } from '../shared/slug'
 import type { Project, Workspace } from '../shared/types'
 import { badRequest, conflict, notFound } from './errors'
@@ -73,6 +76,26 @@ async function refExists(cwd: string, ref: string): Promise<boolean> {
   return (await git(cwd, ['show-ref', '--verify', '--quiet', ref])).ok
 }
 
+async function validBranch(cwd: string, branch: string): Promise<boolean> {
+  return (await git(cwd, ['check-ref-format', '--branch', branch])).ok
+}
+
+/** Keeps `.que/` out of `git status` through the repository's exclude file. */
+export async function excludeQueDir(worktree: string): Promise<void> {
+  const r = await git(worktree, ['rev-parse', '--git-path', 'info/exclude'])
+  if (!r.ok || !r.stdout) return
+  const file = resolve(worktree, r.stdout)
+  let current = ''
+  try {
+    current = fs.readFileSync(file, 'utf8')
+  } catch {
+    // Created below.
+  }
+  if (current.split('\n').some((l) => l.trim() === '.que/')) return
+  fs.mkdirSync(dirname(file), { recursive: true })
+  fs.writeFileSync(file, `${current}${current && !current.endsWith('\n') ? '\n' : ''}.que/\n`)
+}
+
 async function detectDefaultBranch(repo: string): Promise<string> {
   const head = await git(repo, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])
   if (head.ok && head.stdout.startsWith('origin/')) return head.stdout.slice('origin/'.length)
@@ -96,10 +119,14 @@ export interface WorkspaceManagerOptions {
   /** Kills (and announces) every terminal of a workspace. */
   killTerminals: (workspaceId: string) => void
   log?: (msg: string) => void
+  /** Draws a name for a workspace created without one (default: randomWorkspaceName). */
+  randomName?: () => string
 }
 
 export class WorkspaceManager {
   private setups = new Map<string, ChildProcess>()
+  /** Settles when the workspace's setup command ends; absent once it has (or when there is none). */
+  private ready = new Map<string, Promise<void>>()
 
   constructor(private opts: WorkspaceManagerOptions) {}
 
@@ -184,30 +211,47 @@ export class WorkspaceManager {
     return this.opts.store.listWorkspaces(projectId)
   }
 
+  /**
+   * Makes a workspace from a name (a clash is refused) or, without one, under a random
+   * three-word name (drawn again on a clash, up to 50 times). The title defaults to the
+   * brief's first line; a brief goes to `.que/brief.md`.
+   */
   async create(p: WorkspaceCreateParams): Promise<Workspace> {
     const project = this.project(p.projectId)
-    const slug = workspaceSlug(p.name)
-    if (!slug) {
+    const brief = p.brief?.trim() ? p.brief : undefined
+    const title = p.title?.trim() || (brief ? titleOf(brief) : undefined) || undefined
+    const id = newId('ws_')
+    const explicit = p.name !== undefined
+    const draw = this.opts.randomName ?? (() => randomWorkspaceName())
+    const wanted = explicit ? workspaceSlug(p.name ?? '') : draw()
+    if (!wanted) {
       throw badRequest(
-        `invalid workspace name ${JSON.stringify(p.name)}: use letters, digits, '.', '_' or '-' (max 64)`
+        `invalid workspace name ${JSON.stringify(p.name ?? '')}: use letters, digits, '.', '_' or '-' (max 64)`
       )
     }
-    const branch = p.branch ?? slug
-    if (!(await git(project.path, ['check-ref-format', '--branch', branch])).ok) {
-      throw badRequest(`invalid branch name ${JSON.stringify(branch)}`)
+    if (p.branch !== undefined && !(await validBranch(project.path, p.branch))) {
+      throw badRequest(`invalid branch name ${JSON.stringify(p.branch)}`)
+    }
+    if (!(await validBranch(project.path, wanted))) {
+      throw badRequest(`invalid branch name ${JSON.stringify(wanted)}`)
     }
     const config = this.config()
     const repo = this.repoConfig(project.path)
-    const path = join(config.worktreeRoot, project.name, slug)
 
-    for (const other of this.opts.store.findWorkspaceConflicts(project.id, slug, path)) {
-      if (!other.archivedAt) throw conflict(`workspace ${slug} already exists (${other.id})`)
-      this.opts.store.deleteWorkspace(other.id)
+    // The first free name: only the given one for an explicit name, else up to 50 draws.
+    let slug = ''
+    let branch = ''
+    let path = ''
+    let clash = ''
+    for (let i = 1; i <= (explicit ? 1 : 50); i++) {
+      slug = i === 1 ? wanted : draw()
+      branch = p.branch ?? slug
+      path = join(config.worktreeRoot, project.name, slug)
+      clash = await this.clash(project, slug, branch, path)
+      if (!clash) break
+      if (p.branch !== undefined && clash.startsWith('branch')) break
     }
-    if (await refExists(project.path, `refs/heads/${branch}`)) {
-      throw conflict(`branch ${branch} already exists`)
-    }
-    if (fs.existsSync(path)) throw conflict(`path already exists: ${path}`)
+    if (clash) throw conflict(clash)
 
     const remotes = await git(project.path, ['remote'])
     const hasOrigin = remotes.ok && remotes.stdout.split('\n').includes('origin')
@@ -237,10 +281,15 @@ export class WorkspaceManager {
     if (!added.ok) throw badRequest(`git worktree add failed: ${added.stderr}`)
 
     copyIncludes(project.path, path, repo.worktreeInclude, (m) => this.log(m))
+    if (brief) {
+      fs.mkdirSync(join(path, '.que'), { recursive: true })
+      fs.writeFileSync(join(path, '.que', 'brief.md'), brief)
+      await excludeQueDir(path)
+    }
 
     const now = new Date().toISOString()
     const ws: Workspace = {
-      id: newId('ws_'),
+      id,
       projectId: project.id,
       name: slug,
       branch,
@@ -254,7 +303,9 @@ export class WorkspaceManager {
       createdAt: now,
       archivedAt: null,
       prUrl: null,
-      pr: null
+      pr: null,
+      ...(title ? { title } : {}),
+      ...(brief ? { brief } : {})
     }
     this.opts.store.insertWorkspace(ws)
     this.opts.store.insertStatusLog(ws.id, ws.status, null, now)
@@ -265,6 +316,66 @@ export class WorkspaceManager {
     return ws
   }
 
+  /** Why this name, branch, or path cannot be used, or '' (archived rows holding it are dropped). */
+  private async clash(project: Project, slug: string, branch: string, path: string) {
+    for (const other of this.opts.store.findWorkspaceConflicts(project.id, slug, path)) {
+      if (!other.archivedAt) return `workspace ${slug} already exists (${other.id})`
+      this.opts.store.deleteWorkspace(other.id)
+    }
+    if (await refExists(project.path, `refs/heads/${branch}`)) {
+      return `branch ${branch} already exists`
+    }
+    if (fs.existsSync(path)) return `path already exists: ${path}`
+    return ''
+  }
+
+  /** Resolves once the workspace's setup command has ended (at once when none is running). */
+  whenReady(id: string): Promise<void> {
+    return this.ready.get(id) ?? Promise.resolve()
+  }
+
+  /** True when the branch was never pushed: no `origin/<branch>` in the worktree. */
+  async canRenameBranch(id: string): Promise<boolean> {
+    const ws = this.get(id)
+    const remote = await git(ws.path, [
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/origin/${ws.branch}`
+    ])
+    return !remote.ok
+  }
+
+  /**
+   * Sets the title and, given a different branch, renames a never-pushed branch to it (the
+   * folder keeps its name). Announces the change with workspace.updated.
+   */
+  async rename(p: WorkspaceRenameParams): Promise<Workspace> {
+    const ws = this.get(p.id)
+    const title = p.title.trim()
+    if (!title) throw badRequest('title is required')
+    const branch = p.branch?.trim()
+    if (branch !== undefined && branch !== ws.branch) {
+      if (!(await validBranch(ws.path, branch))) {
+        throw badRequest(`invalid branch name ${JSON.stringify(branch)}`)
+      }
+      if (!(await this.canRenameBranch(ws.id))) {
+        throw conflict(`branch ${ws.branch} is on origin; it keeps its name`)
+      }
+      if (await refExists(ws.path, `refs/heads/${branch}`)) {
+        throw conflict(`branch ${branch} already exists`)
+      }
+      const moved = await git(ws.path, ['branch', '-m', ws.branch, branch])
+      if (!moved.ok) throw badRequest(`git branch -m failed: ${moved.stderr}`)
+      this.opts.store.setWorkspaceBranch(ws.id, branch)
+    }
+    this.opts.store.setWorkspaceTitle(ws.id, title)
+    const next = this.get(ws.id)
+    this.log(`workspace ${ws.id} renamed to ${JSON.stringify(title)} on ${next.branch}`)
+    this.opts.emit('workspace.updated', next)
+    return next
+  }
+
   private runSetup(ws: Workspace, command: string | undefined): void {
     if (!command) {
       this.opts.status.set(ws.id, 'idle')
@@ -272,10 +383,19 @@ export class WorkspaceManager {
     }
     const child = this.runInWorktree(ws, 'setup', command)
     this.setups.set(ws.id, child)
+    let markReady = (): void => {}
+    this.ready.set(
+      ws.id,
+      new Promise<void>((resolve) => {
+        markReady = resolve
+      })
+    )
     let done = false
     const finish = (ok: boolean): void => {
       if (done) return
       done = true
+      this.ready.delete(ws.id)
+      markReady()
       if (this.setups.get(ws.id) === child) this.setups.delete(ws.id)
       this.log(`workspace ${ws.id} setup ${ok ? 'finished' : 'failed'}`)
       if (ok) this.opts.status.set(ws.id, 'idle', null, 'preparing')

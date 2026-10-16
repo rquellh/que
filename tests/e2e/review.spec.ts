@@ -100,7 +100,15 @@ test('The review pane lists the changes beside the terminals, opens diffs as tab
 
   await test.step('A project and a workspace from the CLI', async () => {
     project = queJson<Project>(queHome, 'project', 'add', repo, '--json')
-    workspace = queJson<Workspace>(queHome, 'work', 'APP-1432 retry logic', '-r', repo, '--json')
+    workspace = queJson<Workspace>(
+      queHome,
+      'work',
+      '--name',
+      'APP-1432 retry logic',
+      '-r',
+      repo,
+      '--json'
+    )
     expect(workspace.projectId).toBe(project.id)
   })
 

@@ -109,12 +109,39 @@ export interface ProjectRemoveParams {
   force?: boolean
 }
 
+/**
+ * A workspace from a name, or from a title or brief. Without a name it is derived from the
+ * title (the brief's first line when no title is given) and suffixed `-2`, `-3`, … on a clash.
+ */
 export interface WorkspaceCreateParams {
   projectId: string
-  name: string
+  /** Slugged; a clash is refused. */
+  name?: string
+  /** What the work is, in a line; defaults to the brief's first line. */
+  title?: string
+  /** What the work is; written to `<worktree>/.que/brief.md`. */
+  brief?: string
   /** Defaults to origin/<default branch> when that ref exists, else <default branch>. */
   baseRef?: string
-  /** Defaults to the slugged name. */
+  /** Defaults to the workspace name. */
+  branch?: string
+}
+
+export interface WorkspaceStartParams {
+  id: string
+  cols?: number
+  rows?: number
+}
+
+export interface WorkspaceStartResult {
+  /** The workspace terminal claude is typed into (its first, opened when there was none). */
+  terminalId: string
+}
+
+export interface WorkspaceRenameParams {
+  id: string
+  title: string
+  /** A new branch name; only for a branch never pushed to origin. The folder keeps its name. */
   branch?: string
 }
 
@@ -405,6 +432,12 @@ export interface Methods {
   'workspace.remove': { params: WorkspaceRemoveParams; result: Ok }
   'workspace.openTerminal': { params: WorkspaceOpenTerminalParams; result: { id: string } }
   'workspace.createPr': { params: WorkspaceCreatePrParams; result: WorkspaceCreatePrResult }
+  /** Types `claude '<start_prompt>'` into the workspace's first terminal once setup is done. */
+  'workspace.start': { params: WorkspaceStartParams; result: WorkspaceStartResult }
+  /** Sets the title (and, when allowed and asked, renames the branch); emits workspace.updated. */
+  'workspace.rename': { params: WorkspaceRenameParams; result: Workspace }
+  /** Whether workspace.rename may rename the branch: it has no `origin/<branch>`. */
+  'workspace.canRenameBranch': { params: { id: string }; result: { allowed: boolean } }
   /** What the workspace changed against its base: committed and uncommitted, file by file. */
   'workspace.diff': {
     params: { id: string; base?: string; commit?: string }
@@ -451,6 +484,7 @@ export const QUIET_REFUSED_METHODS = [
   'term.snapshot',
   'term.create',
   'workspace.openTerminal',
+  'workspace.start',
   'workspace.createPr',
   'workspace.diff',
   'workspace.prThread',
@@ -474,7 +508,7 @@ export interface Events {
   'term.created': { id: string }
   'term.killed': { id: string }
   'workspace.created': Workspace
-  /** Its pull request (prUrl) changed. */
+  /** Its pull request (prUrl), title, or branch changed. */
   'workspace.updated': Workspace
   'workspace.removed': { id: string }
   'workspace.status': WorkspaceStatusEvent

@@ -30,7 +30,14 @@ import type {
   WorkspaceFiles,
   WorkspaceStatus
 } from '../../../preload/index.d'
-import { ErrorCodes, QUIET_REFUSED_METHODS } from '../../../shared/protocol'
+import { titleOf } from '../../../shared/brief'
+import { randomWorkspaceName } from '../../../shared/names'
+import {
+  ErrorCodes,
+  QUIET_REFUSED_METHODS,
+  type WorkspaceCreateParams,
+  type WorkspaceRenameParams
+} from '../../../shared/protocol'
 import { workspaceSlug } from '../../../shared/slug'
 import { makeQuietState, makeUserConfig } from './fixtures'
 
@@ -84,6 +91,10 @@ class FakeBridge {
   private updateListeners = new Set<(info: UpdateInfo) => void>()
   private updateOpens = 0
   private prCalls: Array<{ id: string; title: string }> = []
+  private createCallLog: WorkspaceCreateParams[] = []
+  private startCallLog: string[] = []
+  private renameCallLog: WorkspaceRenameParams[] = []
+  private pushedBranches = new Set<string>()
   private quiet: QuietState = makeQuietState()
   private unlocks: QuietUnlock[] = []
   private unlockRequests: Array<{ minutes?: number; why?: string }> = []
@@ -359,14 +370,25 @@ class FakeBridge {
         }
       },
       workspace: {
-        create: async ({ projectId, name, baseRef, branch }) => {
+        create: async (p) => {
+          const { projectId, name, baseRef, branch } = p
+          this.createCallLog.push(structuredClone(p))
           const project = this.projects.get(projectId)
           if (!project) throw notFound('project', projectId)
-          const s = workspaceSlug(name)
-          if (!s) throw rpcError('bad_request', `invalid workspace name ${name}`)
+          const brief = p.brief?.trim() ? p.brief : undefined
+          const title = p.title?.trim() || (brief ? titleOf(brief) : '')
+          const id = fakeId('ws_')
+          const s = name !== undefined ? workspaceSlug(name) : randomWorkspaceName()
+          if (!s) throw rpcError('bad_request', `invalid workspace name ${name ?? ''}`)
+          const other = [...this.workspaces.values()].find(
+            (w) => w.projectId === projectId && w.name === s
+          )
+          if (other) throw rpcError('conflict', `workspace ${s} already exists (${other.id})`)
           const now = new Date().toISOString()
           const ws: Workspace = {
-            id: fakeId('ws_'),
+            ...(title ? { title } : {}),
+            ...(brief ? { brief } : {}),
+            id,
             projectId,
             name: s,
             branch: branch ?? s,
@@ -472,6 +494,38 @@ class FakeBridge {
           this.workspaces.set(id, { ...ws, prUrl })
           this.emit('workspace.updated', { ...ws, prUrl })
           return { prUrl }
+        },
+        start: async ({ id, cols, rows }) => {
+          this.refuseIfQuiet('workspace.start')
+          const ws = this.workspace(id)
+          this.startCallLog.push(id)
+          const first = [...this.terminals.values()].find((t) => t.workspaceId === id && t.alive)
+          const terminalId =
+            first?.id ??
+            this.createTerminal(
+              { cwd: ws.path, cols: cols ?? 120, rows: rows ?? 30, name: ws.name },
+              ws.id
+            ).id
+          return { terminalId }
+        },
+        rename: async (p) => {
+          const { id, title } = p
+          const ws = this.workspace(id)
+          if (!title.trim()) throw rpcError('bad_request', 'title is required')
+          this.renameCallLog.push(structuredClone(p))
+          const wanted = p.branch?.trim()
+          if (wanted !== undefined && wanted !== ws.branch && this.pushedBranches.has(id)) {
+            throw rpcError('conflict', `branch ${ws.branch} is on origin; it keeps its name`)
+          }
+          const branch = wanted || ws.branch
+          const next = { ...ws, title: title.trim(), branch }
+          this.workspaces.set(id, next)
+          this.emit('workspace.updated', { ...next })
+          return { ...next }
+        },
+        canRenameBranch: async ({ id }) => {
+          this.workspace(id)
+          return { allowed: !this.pushedBranches.has(id) }
         },
         on: (event, cb) => this.subscribe(event, cb as Listener)
       }
@@ -657,6 +711,26 @@ class FakeBridge {
     return this.prCalls.map((c) => ({ ...c }))
   }
 
+  /** Every workspace.create call's params, in order. */
+  createWorkspaceCalls(): WorkspaceCreateParams[] {
+    return structuredClone(this.createCallLog)
+  }
+
+  /** The workspace id of every workspace.start call, in order. */
+  startCalls(): string[] {
+    return [...this.startCallLog]
+  }
+
+  /** Every workspace.rename call, in order. */
+  renameCalls(): WorkspaceRenameParams[] {
+    return this.renameCallLog.map((c) => ({ ...c }))
+  }
+
+  /** Marks a workspace's branch as pushed to origin, so it cannot be renamed. Call before render(). */
+  setBranchPushed(id: string): void {
+    this.pushedBranches.add(id)
+  }
+
   /** Replaces a task in the book and emits task.updated (cost, turns, PR changed). */
   updateTask(id: string, changes: Partial<Task>): void {
     const t = { ...this.task(id), ...changes, updatedAt: new Date().toISOString() }
@@ -806,6 +880,10 @@ class FakeBridge {
     this.updateListeners.clear()
     this.updateOpens = 0
     this.prCalls = []
+    this.createCallLog = []
+    this.startCallLog = []
+    this.renameCallLog = []
+    this.pushedBranches.clear()
     this.quiet = makeQuietState()
     this.unlocks = []
     this.unlockRequests = []

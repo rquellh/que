@@ -25,6 +25,22 @@ export function shQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`
 }
 
+/** What is typed into a terminal to start an interactive claude on a first prompt. */
+export function claudeCommand(prompt: string): string {
+  return `claude ${shQuote(prompt)}\r`
+}
+
+/**
+ * What workspace.start types: claude on the start prompt when one is set, else on the
+ * brief file read by the shell (so the brief arrives verbatim, never quoted by us), else
+ * a bare claude.
+ */
+export function startCommand(startPrompt: string, briefFile: string | null): string {
+  if (startPrompt.trim() !== '') return claudeCommand(startPrompt)
+  if (briefFile) return `claude "$(cat ${shQuote(briefFile)})"\r`
+  return 'claude\r'
+}
+
 function isExecutableFile(p: string): boolean {
   try {
     const st = fs.statSync(p)

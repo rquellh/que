@@ -26,6 +26,8 @@
     "src/daemon/quiet-hours.ts",
     "src/shared/protocol.ts",
     "src/shared/slug.ts",
+    "src/shared/brief.ts",
+    "src/shared/names.ts",
     "src/shared/types.ts"
   ]
 }

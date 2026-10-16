@@ -33,7 +33,15 @@ test('quiet hours show only the board; an unlock brings detail back until it run
   let board: QuietBoardPage
 
   await test.step('Create a workspace with a running terminal with the CLI', async () => {
-    workspace = queJson<Workspace>(queHome, 'work', 'app-1500-quiet-board', '-r', repo, '--json')
+    workspace = queJson<Workspace>(
+      queHome,
+      'work',
+      '--name',
+      'app-1500-quiet-board',
+      '-r',
+      repo,
+      '--json'
+    )
     expect(que(queHome, 'ws', 'terminal', workspace.id).trim()).toMatch(/^[0-9a-f-]{36}$/)
   })
 

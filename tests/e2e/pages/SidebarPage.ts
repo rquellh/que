@@ -19,7 +19,10 @@ export class SidebarPage {
   sessionOpen: (id: string) => Locator
   reportButton: Locator
   newWorkspaceDialog: Locator
+  newWorkspaceBrief: Locator
+  newWorkspaceStart: Locator
   newWorkspaceName: Locator
+  newWorkspaceNewName: Locator
   newWorkspaceSlug: Locator
   newWorkspaceSubmit: Locator
   removeProjectDialog: Locator
@@ -30,6 +33,7 @@ export class SidebarPage {
   projectAddWorkspace: (id: string) => Locator
   workspace: (id: string) => Locator
   workspaceOpen: (id: string) => Locator
+  workspaceName: (id: string) => Locator
   workspaceStatus: (id: string) => Locator
   workspacePr: (id: string) => Locator
   workspaceMenu: (id: string) => Locator
@@ -50,7 +54,10 @@ export class SidebarPage {
     this.sessionOpen = (id: string) => page.getByTestId(`sidebar-session-${id}-open`)
     this.reportButton = page.getByTestId('sidebar-report')
     this.newWorkspaceDialog = page.getByTestId('dialog-new-workspace')
+    this.newWorkspaceBrief = page.getByTestId('dialog-new-workspace-brief')
+    this.newWorkspaceStart = page.getByTestId('dialog-new-workspace-start')
     this.newWorkspaceName = page.getByTestId('dialog-new-workspace-name')
+    this.newWorkspaceNewName = page.getByTestId('dialog-new-workspace-new-name')
     this.newWorkspaceSlug = page.getByTestId('dialog-new-workspace-slug')
     this.newWorkspaceSubmit = page.getByTestId('dialog-new-workspace-submit')
     this.removeProjectDialog = page.getByTestId('dialog-remove-project')
@@ -62,6 +69,7 @@ export class SidebarPage {
       page.getByTestId(`sidebar-project-${id}-add-workspace`)
     this.workspace = (id: string) => page.getByTestId(`sidebar-workspace-${id}`)
     this.workspaceOpen = (id: string) => page.getByTestId(`sidebar-workspace-${id}-open`)
+    this.workspaceName = (id: string) => page.getByTestId(`sidebar-workspace-${id}-name`)
     this.workspaceStatus = (id: string) => page.getByTestId(`sidebar-workspace-${id}-status`)
     this.workspacePr = (id: string) => page.getByTestId(`sidebar-workspace-${id}-pr`)
     this.workspaceMenu = (id: string) => page.getByTestId(`sidebar-workspace-${id}-menu`)

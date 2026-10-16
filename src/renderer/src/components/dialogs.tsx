@@ -1,10 +1,12 @@
 // The work-mode dialogs. Each owns its form state, calls one store action,
 // and shows the daemon's error inline instead of closing.
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useEffect, useState } from 'react'
 import type { Project, Workspace } from '../../../preload/index.d'
+import { randomWorkspaceName } from '../../../shared/names'
 import { workspaceSlug } from '../../../shared/slug'
 import { useQue, useStore } from '../store'
 import Dialog from './Dialog'
+import { RefreshIcon } from './icons'
 
 function useSubmit(): {
   busy: boolean
@@ -45,19 +47,25 @@ export function NewWorkspaceDialog({
 }): React.JSX.Element {
   const store = useStore()
   const { connected } = useQue()
-  const [name, setName] = useState('')
+  const [brief, setBrief] = useState('')
+  const [name, setName] = useState(() => randomWorkspaceName())
   const [baseRef, setBaseRef] = useState('')
+  const [start, setStart] = useState(true)
   const { busy, error, run } = useSubmit()
   const slug = workspaceSlug(name)
   const id = 'dialog-new-workspace'
+  // Claude needs something to read; a plain workspace does not.
+  const canSubmit = !!slug && (!start || brief.trim() !== '') && !busy && connected
 
-  const submit = (e: FormEvent): void => {
-    e.preventDefault()
-    if (!slug) return
+  const submit = (e?: FormEvent): void => {
+    e?.preventDefault()
+    if (!canSubmit || !slug) return
     void run(async () => {
       await store.createWorkspace({
         projectId: project.id,
+        brief,
         name: slug,
+        start,
         ...(baseRef.trim() ? { baseRef: baseRef.trim() } : {})
       })
       onClose()
@@ -65,37 +73,76 @@ export function NewWorkspaceDialog({
   }
 
   return (
-    <Dialog title={`New workspace in ${project.name}`} testId={id} onClose={onClose}>
+    <Dialog title="New workspace" testId={id} onClose={onClose}>
       <form onSubmit={submit}>
         <label>
-          Name
-          <input
-            data-testid={`${id}-name`}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="APP-1432 retry logic"
-            autoComplete="off"
-            spellCheck={false}
+          What are you doing?
+          <textarea
+            data-testid={`${id}-brief`}
+            value={brief}
+            onChange={(e) => setBrief(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault()
+                submit()
+              }
+            }}
+            placeholder={
+              'Add retry logic to the uploader\n\nBack off exponentially; give up after three tries.'
+            }
+            rows={5}
           />
         </label>
-        <p className="hint" data-testid={`${id}-slug`} aria-live="polite">
-          {name.trim() === ''
-            ? 'Branch and folder are named after it.'
-            : slug
-              ? `Branch and folder: ${slug}`
-              : "Use letters, digits, '.', '_' or '-' (up to 64)."}
-        </p>
-        <label>
-          Base ref (optional)
+        <div className="row">
+          <label>
+            Branch and folder
+            <input
+              data-testid={`${id}-name`}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <button
+            type="button"
+            className="ghost icon name-draw"
+            data-testid={`${id}-new-name`}
+            aria-label="New name"
+            title="New name"
+            onClick={() => setName(randomWorkspaceName())}
+          >
+            <RefreshIcon />
+          </button>
+        </div>
+        {(!slug || slug !== name) && (
+          <p className="hint" data-testid={`${id}-slug`} aria-live="polite">
+            {slug ? `Becomes ${slug}` : "Use letters, digits, '.', '_' or '-' (up to 64)."}
+          </p>
+        )}
+        <label className="check">
           <input
-            data-testid={`${id}-base`}
-            value={baseRef}
-            onChange={(e) => setBaseRef(e.target.value)}
-            placeholder={`origin/${project.defaultBranch}`}
-            autoComplete="off"
-            spellCheck={false}
+            type="checkbox"
+            data-testid={`${id}-start`}
+            checked={start}
+            onChange={(e) => setStart(e.target.checked)}
           />
+          Start Claude with this brief
         </label>
+        <details className="dialog-advanced">
+          <summary>Advanced</summary>
+          <label>
+            Base ref (optional)
+            <input
+              data-testid={`${id}-base`}
+              value={baseRef}
+              onChange={(e) => setBaseRef(e.target.value)}
+              placeholder={`origin/${project.defaultBranch}`}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+        </details>
         <FormError error={error} testId={id} />
         <div className="dialog-actions">
           <button type="button" onClick={onClose}>
@@ -105,9 +152,100 @@ export function NewWorkspaceDialog({
             type="submit"
             className="primary"
             data-testid={`${id}-submit`}
-            disabled={!slug || busy || !connected}
+            disabled={!canSubmit}
           >
             {busy ? 'Creating…' : 'Create workspace'}
+          </button>
+        </div>
+      </form>
+    </Dialog>
+  )
+}
+
+export function RenameWorkspaceDialog({
+  workspace,
+  onClose
+}: {
+  workspace: Workspace
+  onClose: () => void
+}): React.JSX.Element {
+  const store = useStore()
+  const { connected } = useQue()
+  const [title, setTitle] = useState(workspace.title ?? workspace.name)
+  const [branch, setBranch] = useState(workspace.branch)
+  /** Null until the daemon says whether the branch was pushed. */
+  const [branchRenamable, setBranchRenamable] = useState<boolean | null>(null)
+  const { busy, error, run } = useSubmit()
+  const id = 'dialog-rename-workspace'
+  const newBranch = branch.trim()
+  const branchChanged = branchRenamable === true && newBranch !== workspace.branch
+
+  useEffect(() => {
+    let live = true
+    store.canRenameBranch(workspace.id).then(
+      (allowed) => {
+        if (live) setBranchRenamable(allowed)
+      },
+      () => {
+        if (live) setBranchRenamable(false)
+      }
+    )
+    return () => {
+      live = false
+    }
+  }, [store, workspace.id])
+
+  const submit = (e: FormEvent): void => {
+    e.preventDefault()
+    void run(async () => {
+      await store.renameWorkspace(workspace.id, title.trim(), branchChanged ? newBranch : undefined)
+      onClose()
+    })
+  }
+
+  return (
+    <Dialog title={`Rename ${workspace.title ?? workspace.name}`} testId={id} onClose={onClose}>
+      <form onSubmit={submit}>
+        <label>
+          Title
+          <input
+            data-testid={`${id}-title`}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            autoComplete="off"
+          />
+        </label>
+        <label>
+          Branch
+          <input
+            data-testid={`${id}-branch`}
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            disabled={branchRenamable !== true}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </label>
+        {branchRenamable === false && (
+          <p className="hint" data-testid={`${id}-branch-pushed`}>
+            Pushed branches keep their name
+          </p>
+        )}
+        <p className="hint">The folder keeps its name, {workspace.name}.</p>
+        <FormError error={error} testId={id} />
+        <div className="dialog-actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="submit"
+            className="primary"
+            data-testid={`${id}-submit`}
+            disabled={
+              title.trim() === '' || (branchChanged && newBranch === '') || busy || !connected
+            }
+          >
+            Rename
           </button>
         </div>
       </form>

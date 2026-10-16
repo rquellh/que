@@ -71,6 +71,8 @@ export interface TestDaemonOptions {
   home?: string
   /** Directories put ahead of the fakes on the daemon's PATH (e.g. FAKE_WRAPPERS). */
   pathPrefix?: string[]
+  /** Draws the names of workspaces created without one (e.g. scripted, to force clashes). */
+  randomWorkspaceName?: () => string
 }
 
 export async function startTestDaemon(opts: TestDaemonOptions = {}): Promise<TestDaemon> {
@@ -117,7 +119,8 @@ export async function startTestDaemon(opts: TestDaemonOptions = {}): Promise<Tes
     queueTickMs: 100,
     dispatchMs: 100,
     quietTickMs: opts.quietTickMs ?? 200,
-    now: opts.now
+    now: opts.now,
+    randomWorkspaceName: opts.randomWorkspaceName
   })
   await server.listen(paths.socket)
   const client = new DaemonClient(paths.socket)

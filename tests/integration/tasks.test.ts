@@ -93,7 +93,6 @@ describe('runner and finisher', () => {
     expect(done).toMatchObject({
       title: 'Add retry logic to the uploader',
       reason: null,
-      branch: 'add-retry-logic-to-the-uploader',
       prUrl: 'https://github.com/rquellh/que/pull/1',
       costUsd: 0.0123,
       turns: 2,
@@ -101,13 +100,22 @@ describe('runner and finisher', () => {
       attempts: 1,
       pid: null
     })
+    // Task workspaces get a random three-word name, which is also the branch.
+    const branch = done.branch as string
+    expect(branch).toMatch(/^[a-z]+-[a-z]+-[a-z]+$/)
     expect(done.sessionId).toMatch(/^[0-9a-f-]{36}$/)
     expect(statesOf(statuses, task.id)).toEqual(['preparing', 'running', 'finishing', 'done'])
-    expect(originBranches(origin)).toContain('add-retry-logic-to-the-uploader')
-    expect(gitIn(origin, 'log', '--format=%s', 'main..add-retry-logic-to-the-uploader')).toBe(
+    expect(originBranches(origin)).toContain(branch)
+    expect(gitIn(origin, 'log', '--format=%s', `main..${branch}`)).toBe(
       'Add retry logic to the uploader'
     )
     const ws = await d.client.request('workspace.get', { id: done.workspaceId as string })
+    expect(ws).toMatchObject({
+      name: branch,
+      title: 'Add retry logic to the uploader',
+      brief
+    })
+    expect(fs.readFileSync(join(ws.path, '.que', 'brief.md'), 'utf8')).toBe(brief)
     expect(gitIn(ws.path, 'status', '--porcelain')).toBe('')
     const [pr] = readFakeLog(d.ghLog)
     expect(pr.argv.slice(0, 5)).toEqual([

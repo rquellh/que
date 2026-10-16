@@ -6,6 +6,7 @@ import type {
   Weekday
 } from '../../../preload/index.d'
 import { currentWindow } from '../../../daemon/quiet-hours'
+import { SUGGESTED_START_PROMPT } from '../../../shared/brief'
 import { WEEKDAYS } from '../../../shared/types'
 import { useQue, useStore } from '../store'
 import Dialog from './Dialog'
@@ -33,6 +34,10 @@ interface Form {
   site: string
   pollMinutes: string
   startPrompt: string
+  /** Send `start_prompt` to Claude instead of the brief (off: `start_prompt` is removed). */
+  useStartPrompt: boolean
+  /** The top-level `start_prompt`, for a workspace made from a brief. */
+  workspacePrompt: string
   instructionsFile: string
 }
 
@@ -69,6 +74,8 @@ function toForm(c: UserConfig): Form {
     site: c.jira.site ?? '',
     pollMinutes: String(c.jira.pollMinutes),
     startPrompt: c.jira.startPrompt,
+    useStartPrompt: c.startPrompt.trim() !== '',
+    workspacePrompt: c.startPrompt,
     instructionsFile: c.instructionsFile ?? ''
   }
 }
@@ -91,6 +98,9 @@ function validate(f: Form): string[] {
   const poll = Number(f.pollMinutes)
   if (f.pollMinutes.trim() === '' || !Number.isFinite(poll) || poll <= 0) {
     errors.push('Sync minutes must be a positive number')
+  }
+  if (f.useStartPrompt && f.workspacePrompt.trim() === '') {
+    errors.push('The workspace start prompt cannot be empty')
   }
   if (f.startPrompt.trim() === '') errors.push('The start prompt cannot be empty')
   const file = f.instructionsFile.trim()
@@ -143,6 +153,7 @@ function patchOf(f: Form): Record<string, unknown> {
       poll_minutes: Number(f.pollMinutes),
       start_prompt: f.startPrompt
     },
+    start_prompt: f.useStartPrompt ? f.workspacePrompt : null,
     instructions_file: f.instructionsFile.trim() === '' ? null : f.instructionsFile.trim(),
     protected_branches: f.protectedBranches
       .split(',')
@@ -426,6 +437,41 @@ export default function SettingsView(): React.JSX.Element {
               ))
             )}
           </div>
+        </fieldset>
+        <fieldset>
+          <legend>New workspaces</legend>
+          <label className="check">
+            <input
+              type="checkbox"
+              data-testid="settings-start-prompt-enabled"
+              checked={form.useStartPrompt}
+              onChange={(e) =>
+                update({
+                  useStartPrompt: e.target.checked,
+                  ...(e.target.checked && form.workspacePrompt.trim() === ''
+                    ? { workspacePrompt: SUGGESTED_START_PROMPT }
+                    : {})
+                })
+              }
+            />
+            Use a start prompt instead of the brief
+          </label>
+          {form.useStartPrompt ? (
+            <label>
+              Start prompt
+              <textarea
+                rows={3}
+                data-testid="settings-workspace-prompt"
+                value={form.workspacePrompt}
+                onChange={(e) => update({ workspacePrompt: e.target.value })}
+              />
+              <span className="hint">
+                Sent to Claude instead of the brief; the brief is in .que/brief.md
+              </span>
+            </label>
+          ) : (
+            <p className="hint">Claude starts on the brief itself.</p>
+          )}
         </fieldset>
         <fieldset data-testid="settings-instructions">
           <legend>Instructions</legend>

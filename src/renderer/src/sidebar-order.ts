@@ -16,7 +16,8 @@ export function filterSidebar(
   workspaces: Workspace[]
 ): { projects: Project[]; workspacesOf: (projectId: string) => Workspace[] } {
   const of = (id: string): Workspace[] => workspaces.filter((w) => w.projectId === id)
-  const hits = (id: string): Workspace[] => of(id).filter((w) => matches(needle, w.name, w.branch))
+  const hits = (id: string): Workspace[] =>
+    of(id).filter((w) => matches(needle, w.title, w.name, w.branch, w.brief))
   const kept = projects.filter((p) => matches(needle, p.name) || hits(p.id).length > 0)
   return {
     projects: kept,
@@ -34,10 +35,14 @@ function activityOf(w: Workspace): number {
   return Number.isNaN(t) ? 0 : t
 }
 
+/** Workspaces sort by what the sidebar shows: the title, else the name. */
+const byLabel = (a: Workspace, b: Workspace): number =>
+  (a.title ?? a.name).localeCompare(b.title ?? b.name)
+
 export function sortWorkspaces(workspaces: Workspace[], sort: SidebarSort): Workspace[] {
   const out = [...workspaces]
-  if (sort === 'name') return out.sort(byName)
-  return out.sort((a, b) => activityOf(b) - activityOf(a) || byName(a, b))
+  if (sort === 'name') return out.sort(byLabel)
+  return out.sort((a, b) => activityOf(b) - activityOf(a) || byLabel(a, b))
 }
 
 export function sortProjects(

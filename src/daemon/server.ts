@@ -46,7 +46,7 @@ import { workspaceDiff } from './diff'
 import { readWorkspaceFile, workspaceFiles } from './files'
 import { sessionEnv, WorkspaceManager, workspaceTerminalEnv } from './workspaces'
 import { WorktreeWatcher } from './watcher'
-import { defaultCliScript, installWrapper, resolveCliRunner } from './wrapper'
+import { defaultCliScript, installWrapper, resolveCliRunner, startCommand } from './wrapper'
 
 export interface ServerOptions {
   host: PtyHost
@@ -69,6 +69,8 @@ export interface ServerOptions {
   quietTickMs?: number
   /** The clock quiet hours read. Default Date.now. */
   now?: () => number
+  /** Draws the name of a workspace created without one. Default randomWorkspaceName. */
+  randomWorkspaceName?: () => string
 }
 
 interface Subscription {
@@ -156,7 +158,8 @@ export class DaemonServer {
       status: this.status,
       emit,
       killTerminals: (id) => this.killWorkspaceTerminals(id),
-      log: (m) => this.log(m)
+      log: (m) => this.log(m),
+      randomName: opts.randomWorkspaceName
     })
     this.tasks = new TaskQueue({
       store: this.store,
@@ -317,6 +320,30 @@ export class DaemonServer {
     this.log(`term ${t.id} created pid=${t.proc.pid} cwd=${t.cwd}`)
     this.broadcast('term.created', { id: t.id })
     return t
+  }
+
+  /**
+   * Starts claude on the brief (or the configured start prompt) in the workspace's first terminal (opened when it has
+   * none). Answers with the terminal at once; the command is typed once setup has ended.
+   */
+  private startWorkspace(id: string, cols = 120, rows = 30): { terminalId: string } {
+    const ws = this.workspaces.get(id)
+    const first =
+      this.opts.host.list().find((t) => t.alive && t.workspaceId === ws.id) ??
+      this.createTerminal(
+        { cwd: ws.path, cols, rows, name: ws.name },
+        { workspaceId: ws.id, env: this.terminalEnv(ws) }
+      )
+    const command = startCommand(
+      this.configOrDefault().startPrompt,
+      ws.brief ? join(ws.path, '.que', 'brief.md') : null
+    )
+    void this.workspaces.whenReady(ws.id).then(() => {
+      const t = this.opts.host.get(first.id)
+      if (t?.alive) t.write(command)
+      else this.log(`workspace ${ws.id}: terminal ${first.id} is gone; claude not started`)
+    })
+    return { terminalId: first.id }
   }
 
   private killTerminal(id: string): boolean {
@@ -667,10 +694,22 @@ export class DaemonServer {
       case 'workspace.create':
         return this.workspaces.create({
           projectId: str(p, 'projectId'),
-          name: str(p, 'name'),
+          name: optString(p, 'name'),
+          title: optString(p, 'title'),
+          brief: optString(p, 'brief'),
           baseRef: optString(p, 'baseRef'),
           branch: optString(p, 'branch')
         })
+      case 'workspace.start':
+        return this.startWorkspace(str(p, 'id'), optNumber(p, 'cols'), optNumber(p, 'rows'))
+      case 'workspace.rename':
+        return this.workspaces.rename({
+          id: str(p, 'id'),
+          title: str(p, 'title'),
+          branch: optString(p, 'branch')
+        })
+      case 'workspace.canRenameBranch':
+        return { allowed: await this.workspaces.canRenameBranch(str(p, 'id')) }
       case 'workspace.list':
         return this.workspaces.list(optString(p, 'projectId'))
       case 'workspace.get':

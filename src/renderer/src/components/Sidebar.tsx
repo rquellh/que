@@ -96,6 +96,11 @@ export default function Sidebar(): React.JSX.Element {
 
   const workspaceItems = (w: Workspace): MenuItem[] => [
     {
+      label: 'Rename…',
+      testId: 'rename',
+      action: () => store.openDialog({ kind: 'rename-workspace', workspaceId: w.id })
+    },
+    {
       label: 'Open in editor',
       testId: 'open-editor',
       action: () => void store.openInEditor(w.path)
@@ -305,10 +310,12 @@ export default function Sidebar(): React.JSX.Element {
                           className="row-button"
                           data-testid={`sidebar-workspace-${w.id}-open`}
                           aria-current={selected === w.id ? 'page' : undefined}
-                          title={w.path}
+                          title={w.brief?.trim() ? `${w.brief.trim()}\n${w.path}` : w.path}
                           onClick={() => store.showTerminals(w.id)}
                         >
-                          <span className="name">{w.name}</span>
+                          <span className="name" data-testid={`sidebar-workspace-${w.id}-name`}>
+                            {w.title ?? w.name}
+                          </span>
                           <WorkspaceBadge w={w} task={owned.get(w.id)} />
                         </button>
                         {w.pr ? (
@@ -331,7 +338,7 @@ export default function Sidebar(): React.JSX.Element {
                           type="button"
                           className="ghost more"
                           data-testid={`sidebar-workspace-${w.id}-menu`}
-                          aria-label={`More actions for ${w.name}`}
+                          aria-label={`More actions for ${w.title ?? w.name}`}
                           aria-haspopup="menu"
                           aria-expanded={workspaceMenu !== null}
                           onClick={() => toggleMenu('workspace', w.id)}
@@ -340,7 +347,7 @@ export default function Sidebar(): React.JSX.Element {
                         </button>
                         {workspaceMenu && (
                           <Menu
-                            label={`Actions for ${w.name}`}
+                            label={`Actions for ${w.title ?? w.name}`}
                             testId={`sidebar-workspace-${w.id}-menu`}
                             items={workspaceItems(w)}
                             at={workspaceMenu.at}

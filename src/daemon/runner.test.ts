@@ -1,12 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { makeTask } from '../testing/fixtures'
-import {
-  buildClaudeArgs,
-  buildPrompt,
-  resolvePermissionMode,
-  SYSTEM_PROMPT,
-  taskWorkspaceName
-} from './runner'
+import { buildClaudeArgs, buildPrompt, resolvePermissionMode, SYSTEM_PROMPT } from './runner'
 
 describe('buildPrompt', () => {
   it('is the brief, then the repo instructions, then the definition of done with the test command', () => {
@@ -135,23 +129,5 @@ describe('buildClaudeArgs', () => {
       '5f0c1d2e-0000-4000-8000-9a8b7c6d5e4f'
     ])
     expect(args.slice(-2)).toEqual(['--allowedTools', 'Bash(npm test),Edit'])
-  })
-})
-
-describe('taskWorkspaceName', () => {
-  it('slugs and shortens the title', () => {
-    expect(taskWorkspaceName('Add retry logic to the uploader', 'tsk_a2b3c4d5e6f7')).toBe(
-      'add-retry-logic-to-the-uploader'
-    )
-    expect(
-      taskWorkspaceName(
-        'Refactor the upload queue so that retries back off exponentially per host',
-        'tsk_x'
-      )
-    ).toBe('refactor-the-upload-queue-so-that-retries-back-o')
-  })
-
-  it('falls back to the task id when the title has no usable characters', () => {
-    expect(taskWorkspaceName('✨🚀', 'tsk_a2b3c4d5e6f7')).toBe('task-a2b3c4d5')
   })
 })

@@ -116,7 +116,7 @@ describe('que config', () => {
 describe('detail commands during quiet hours', () => {
   it('attach, open, report, run and term new print the refusal and exit 3', async () => {
     const repo = makeTempRepo(daemon.home)
-    expect((await runCli('work', 'app-1490-quiet-cli', '-r', repo)).code).toBe(0)
+    expect((await runCli('work', '--name', 'app-1490-quiet-cli', '-r', repo)).code).toBe(0)
     const refusal = `quiet hours until ${windowEnd}; run \`que unlock\` for 20 minutes\n`
 
     for (const args of [

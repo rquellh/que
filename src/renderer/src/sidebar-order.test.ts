@@ -51,6 +51,22 @@ describe('filterSidebar', () => {
     expect(r.workspacesOf('p_b')).toEqual([fresh, mid])
   })
 
+  it('matches a workspace by its title or its brief', () => {
+    const briefed = makeWorkspace({
+      projectId: 'p_a',
+      name: 'speed-up-the-diff-view',
+      title: 'Speed up the diff view',
+      brief: 'Speed up the diff view\n\nVirtualize the file list past 500 files.'
+    })
+
+    expect(filterSidebar('diff VIEW', [alpha], [old, briefed]).workspacesOf('p_a')).toEqual([
+      briefed
+    ])
+    expect(filterSidebar('virtualize', [alpha], [old, briefed]).workspacesOf('p_a')).toEqual([
+      briefed
+    ])
+  })
+
   it('keeps everything for an empty needle', () => {
     const r = filterSidebar('', [alpha, beta, empty], all)
     expect(r.projects).toHaveLength(3)
@@ -67,6 +83,11 @@ describe('sortWorkspaces', () => {
     expect(sortWorkspaces([old, mid, fresh], 'activity')).toEqual([fresh, mid, old])
     const quiet = makeWorkspace({ name: 'aaa', statusAt: '2026-10-20T00:00:00.000Z' })
     expect(sortWorkspaces([fresh, quiet], 'activity')).toEqual([quiet, fresh])
+  })
+
+  it('sorts by the title when there is one, as the sidebar shows it', () => {
+    const titled = makeWorkspace({ name: 'zz-fix-upload', title: 'Fix the upload retry' })
+    expect(sortWorkspaces([old, titled, mid], 'name')).toEqual([titled, mid, old])
   })
 
   it('breaks ties by name and does not mutate its input', () => {

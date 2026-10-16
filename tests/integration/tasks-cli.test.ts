@@ -60,7 +60,7 @@ describe('que add, run, task list, report', () => {
       expect.objectContaining({
         id,
         title: 'Add retry logic to the uploader',
-        workspace: 'add-retry-logic-to-the-uploader',
+        workspace: expect.stringMatching(/^[a-z]+-[a-z]+-[a-z]+$/),
         prUrl: 'https://github.com/rquellh/que/pull/1',
         turns: 2,
         costUsd: 0.0123

@@ -999,6 +999,15 @@ body.resizing {
   resize: vertical;
 }
 
+.dialog-advanced summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+}
+
+.dialog-advanced > label {
+  margin-top: 8px;
+}
+
 .dialog .row {
   display: flex;
   gap: 10px;
@@ -1006,6 +1015,10 @@ body.resizing {
 
 .dialog .row label {
   flex: 1;
+}
+
+.name-draw {
+  align-self: flex-end;
 }
 
 .hint {

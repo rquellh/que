@@ -3,6 +3,7 @@
 // task machine (through `apply`), kills the run when the machine says so, and
 // hands a finished run to the finisher.
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process'
+import { titleOf } from '../shared/brief'
 import { cleanSpawnEnv } from '../shared/env'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
@@ -207,9 +208,18 @@ export class TaskRunner {
     return !this.closed && this.o.store.getTask(id)?.state === 'preparing'
   }
 
-  /** The task's workspace, named from its title (suffixed on a clash) by WorkspaceManager.create. */
+  /**
+   * The task's workspace, made from its brief. A title derived from the brief is left for
+   * create to derive again (a brief title the summariser may refresh); one the user gave
+   * (`que add --title`) is passed on and stays theirs.
+   */
   private createWorkspace(task: Task, project: Project): Promise<Workspace> {
-    return this.o.workspaces.create({ projectId: project.id, title: task.title, brief: task.brief })
+    const derived = task.title === titleOf(task.brief)
+    return this.o.workspaces.create({
+      projectId: project.id,
+      brief: task.brief,
+      ...(derived ? {} : { title: task.title })
+    })
   }
 
   /** Waits until the workspace's setup command has finished. */

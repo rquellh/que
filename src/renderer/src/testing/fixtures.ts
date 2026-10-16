@@ -191,6 +191,9 @@ export function makeUserConfig(overrides: Partial<UserConfig> = {}): UserConfig 
       projects: {}
     },
     startPrompt: '',
+    summaries: true,
+    summaryModel: 'haiku',
+    summaryIntervalMinutes: 5,
     ...overrides
   }
 }

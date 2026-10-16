@@ -37,7 +37,15 @@ export interface Workspace {
   title?: string
   /** The description the workspace was made from (written to `.que/brief.md`). */
   brief?: string
+  /**
+   * Where the title came from: the brief's first line, the background summariser, or the
+   * user (an explicit title or a rename, which stops automatic updates).
+   */
+  titleSource?: TitleSource
 }
+
+/** Where a workspace's title came from. */
+export type TitleSource = 'brief' | 'summary' | 'user'
 
 export type CheckState = 'pending' | 'passing' | 'failing' | 'skipped'
 
@@ -290,6 +298,12 @@ export interface UserConfig {
   jira: JiraConfig
   /** What claude starts on in a workspace made from a brief; empty (the default) means the brief itself. */
   startPrompt: string
+  /** Sidebar titles summarised in the background by a small model. */
+  summaries: boolean
+  /** The model the summariser asks (`claude --model`). */
+  summaryModel: string
+  /** At most one summary per workspace in this many minutes. */
+  summaryIntervalMinutes: number
 }
 
 /** A newer que release, found by the app's daily update check. */

@@ -51,17 +51,28 @@ export interface TestDaemon {
  */
 export const QUIET_OFF = '\n[quiet_hours]\nenabled = false\n'
 
-/** A test config with quiet hours off unless it sets its own [quiet_hours]. */
+/**
+ * Sidebar-title summaries default to on, which would run the fake claude in the
+ * background and replace every brief title while a test reads it. Test daemons
+ * turn them off unless a test's own config sets `summaries`.
+ */
+export const SUMMARIES_OFF = 'summaries = false\n'
+
+/**
+ * A test config with quiet hours off unless it sets its own [quiet_hours], and
+ * summaries off unless it sets `summaries` (top-level keys go first, before any table).
+ */
 export function withQuietOff(config = ''): string {
-  return config.includes('[quiet_hours]') ? config : `${config}${QUIET_OFF}`
+  const summaries = /^summaries\s*=/m.test(config) ? '' : SUMMARIES_OFF
+  return `${summaries}${config.includes('[quiet_hours]') ? config : `${config}${QUIET_OFF}`}`
 }
 
 export interface TestDaemonOptions {
   /** Called after daemon.shutdown's response is flushed. */
   onShutdown?: () => void
-  /** config.toml contents, written before the daemon starts (quiet hours off unless set). */
+  /** config.toml contents, written before the daemon starts (quiet hours and summaries off unless set). */
   config?: string
-  /** The clock quiet hours read (e.g. real time shifted to just before a boundary). */
+  /** The clock quiet hours and the summary throttle read (e.g. real time shifted ahead). */
   now?: () => number
   /** Quiet-hours re-evaluation interval. Default 200 ms (the daemon's is 15 s). */
   quietTickMs?: number

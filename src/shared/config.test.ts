@@ -37,7 +37,10 @@ describe('parseConfig', () => {
         },
         notifications: { chimeOnComplete: true, chimeOnNeedsInput: false, morningSummary: false },
         jira: defaultJira(),
-        startPrompt: ''
+        startPrompt: '',
+        summaries: true,
+        summaryModel: 'haiku',
+        summaryIntervalMinutes: 5
       }
     })
   })
@@ -55,6 +58,9 @@ default_permission_mode = "plan"
 allow_bypass_permissions = true
 protected_branches = ["main", "production"]
 start_prompt = "Read .que/brief.md and ask before editing."
+summaries = false
+summary_model = " sonnet "
+summary_interval_minutes = 15
 
 [repos.uploader]
 path = "/Users/dev/code/uploader"
@@ -86,7 +92,10 @@ path = "/Users/dev/code/api"
         quietHours: expect.objectContaining({ enabled: true }),
         notifications: expect.objectContaining({ chimeOnComplete: true }),
         jira: defaultJira(),
-        startPrompt: 'Read .que/brief.md and ask before editing.'
+        startPrompt: 'Read .que/brief.md and ask before editing.',
+        summaries: false,
+        summaryModel: 'sonnet',
+        summaryIntervalMinutes: 15
       }
     })
   })
@@ -252,6 +261,23 @@ start_prompt = 3
     expect(set.ok && set.config.startPrompt).toBe('Read .que/brief.md first.')
     const again = parseConfig(stringifyConfig({ start_prompt: '' }), env)
     expect(again.ok && again.config.startPrompt).toBe('')
+  })
+
+  it('reports bad sidebar-title summary settings by key', () => {
+    const bad = parseConfig(
+      'summaries = "yes"\nsummary_model = ""\nsummary_interval_minutes = 0.5\n',
+      env
+    )
+    expect(!bad.ok && bad.errors.map((e) => e.key)).toEqual([
+      'summaries',
+      'summary_model',
+      'summary_interval_minutes'
+    ])
+    const zero = parseConfig('summary_interval_minutes = 0\n', env)
+    expect(!zero.ok && zero.errors[0]).toEqual({
+      key: 'summary_interval_minutes',
+      message: 'must be a whole number of at least 1'
+    })
   })
 
   it('reports a TOML syntax error without a key', () => {

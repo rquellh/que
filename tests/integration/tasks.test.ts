@@ -113,6 +113,7 @@ describe('runner and finisher', () => {
     expect(ws).toMatchObject({
       name: branch,
       title: 'Add retry logic to the uploader',
+      titleSource: 'brief',
       brief
     })
     expect(fs.readFileSync(join(ws.path, '.que', 'brief.md'), 'utf8')).toBe(brief)
@@ -129,6 +130,21 @@ describe('runner and finisher', () => {
     const body = fs.readFileSync(pr.argv[pr.argv.indexOf('--body-file') + 1], 'utf8')
     expect(body).toMatch(/^Done: Add retry logic to the uploader/)
     expect(body).toContain(`Opened by que from workspace ${ws.name}.`)
+  }, 45_000)
+
+  it('keeps a title given with the task as the workspace title, pinned as set by the user', async () => {
+    const { d, projectId } = await setup()
+
+    const task = await d.client.request('task.add', {
+      projectId,
+      title: 'Uploader retries',
+      brief: 'Add retry logic to the uploader\nUse exponential backoff.'
+    })
+    await d.client.request('queue.open')
+
+    const done = await waitFor(d, task.id, 'done')
+    const ws = await d.client.request('workspace.get', { id: done.workspaceId as string })
+    expect(ws).toMatchObject({ title: 'Uploader retries', titleSource: 'user' })
   }, 45_000)
 
   it('success: pushes the commit the agent made itself, adding none', async () => {

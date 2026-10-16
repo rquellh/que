@@ -431,3 +431,47 @@ describe('SettingsView instructions', () => {
     })
   })
 })
+
+describe('SettingsView sidebar titles', () => {
+  it('loads the summary settings and saves changes as the top-level keys', async () => {
+    const user = userEvent.setup()
+    fakeBridge.setConfig({ summaries: true, summaryModel: 'haiku', summaryIntervalMinutes: 5 })
+    await openSettings(user)
+
+    const toggle = await screen.findByRole('checkbox', {
+      name: 'Summarise what each session is doing in its sidebar title'
+    })
+    expect(toggle).toBeChecked()
+    expect(screen.getByLabelText('Model')).toHaveValue('haiku')
+    expect(screen.getByLabelText(/At most every \(minutes\)/)).toHaveValue(5)
+
+    await user.click(toggle)
+    await user.clear(screen.getByLabelText('Model'))
+    await user.type(screen.getByLabelText('Model'), 'sonnet')
+    await user.clear(screen.getByLabelText(/At most every \(minutes\)/))
+    await user.type(screen.getByLabelText(/At most every \(minutes\)/), '15')
+    await user.click(screen.getByTestId('settings-save'))
+
+    await waitFor(() => expect(fakeBridge.configSetCalls()).toHaveLength(1))
+    expect(fakeBridge.configSetCalls()[0].patch).toMatchObject({
+      summaries: false,
+      summary_model: 'sonnet',
+      summary_interval_minutes: 15
+    })
+  })
+
+  it('refuses an empty model or an interval under a minute, saying why', async () => {
+    const user = userEvent.setup()
+    await openSettings(user)
+
+    await user.clear(await screen.findByLabelText('Model'))
+    await user.clear(screen.getByLabelText(/At most every \(minutes\)/))
+    await user.type(screen.getByLabelText(/At most every \(minutes\)/), '0.5')
+    await user.click(screen.getByTestId('settings-save'))
+
+    const error = await screen.findByTestId('settings-error')
+    expect(error).toHaveTextContent('The summary model cannot be empty')
+    expect(error).toHaveTextContent('Summary minutes must be a whole number of at least 1')
+    expect(fakeBridge.configSetCalls()).toEqual([])
+  })
+})

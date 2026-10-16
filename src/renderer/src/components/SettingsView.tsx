@@ -39,6 +39,9 @@ interface Form {
   /** The top-level `start_prompt`, for a workspace made from a brief. */
   workspacePrompt: string
   instructionsFile: string
+  summaries: boolean
+  summaryModel: string
+  summaryInterval: string
 }
 
 /** Monday first, as people read a week. */
@@ -76,7 +79,10 @@ function toForm(c: UserConfig): Form {
     startPrompt: c.jira.startPrompt,
     useStartPrompt: c.startPrompt.trim() !== '',
     workspacePrompt: c.startPrompt,
-    instructionsFile: c.instructionsFile ?? ''
+    instructionsFile: c.instructionsFile ?? '',
+    summaries: c.summaries,
+    summaryModel: c.summaryModel,
+    summaryInterval: String(c.summaryIntervalMinutes)
   }
 }
 
@@ -103,6 +109,11 @@ function validate(f: Form): string[] {
     errors.push('The workspace start prompt cannot be empty')
   }
   if (f.startPrompt.trim() === '') errors.push('The start prompt cannot be empty')
+  if (f.summaryModel.trim() === '') errors.push('The summary model cannot be empty')
+  const interval = Number(f.summaryInterval)
+  if (f.summaryInterval.trim() === '' || !Number.isInteger(interval) || interval < 1) {
+    errors.push('Summary minutes must be a whole number of at least 1')
+  }
   const file = f.instructionsFile.trim()
   if (file !== '' && !file.startsWith('/') && !file.startsWith('~')) {
     errors.push('The instructions file must be an absolute path or start with ~')
@@ -154,6 +165,9 @@ function patchOf(f: Form): Record<string, unknown> {
       start_prompt: f.startPrompt
     },
     start_prompt: f.useStartPrompt ? f.workspacePrompt : null,
+    summaries: f.summaries,
+    summary_model: f.summaryModel.trim(),
+    summary_interval_minutes: Number(f.summaryInterval),
     instructions_file: f.instructionsFile.trim() === '' ? null : f.instructionsFile.trim(),
     protected_branches: f.protectedBranches
       .split(',')
@@ -472,6 +486,42 @@ export default function SettingsView(): React.JSX.Element {
           ) : (
             <p className="hint">Claude starts on the brief itself.</p>
           )}
+        </fieldset>
+        <fieldset>
+          <legend>Sidebar titles</legend>
+          <label className="check">
+            <input
+              type="checkbox"
+              data-testid="settings-summaries-enabled"
+              checked={form.summaries}
+              onChange={(e) => update({ summaries: e.target.checked })}
+            />
+            Summarise what each session is doing in its sidebar title
+          </label>
+          <label>
+            Model
+            <input
+              data-testid="settings-summary-model"
+              value={form.summaryModel}
+              onChange={(e) => update({ summaryModel: e.target.value })}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
+          <label>
+            At most every (minutes)
+            <input
+              type="number"
+              min="1"
+              step="1"
+              data-testid="settings-summary-interval"
+              value={form.summaryInterval}
+              onChange={(e) => update({ summaryInterval: e.target.value })}
+            />
+            <span className="hint">
+              One short call to the model after a turn ends; renaming a workspace keeps your title
+            </span>
+          </label>
         </fieldset>
         <fieldset data-testid="settings-instructions">
           <legend>Instructions</legend>

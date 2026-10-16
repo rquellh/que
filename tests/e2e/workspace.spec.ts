@@ -3,8 +3,8 @@
 // a Claude Code session typed into it (the fake, through que's hooks wrapper)
 // reports needs input back to `que status`, and the report lists the workspace
 // as waiting. And a workspace made from a brief in the dialog: under a random
-// three-word name, titled with its first line in the sidebar (the brief on hover), and claude
-// started on the brief itself in its only terminal.
+// three-word name, titled in the sidebar by the background summary of the session (the brief
+// on hover), and claude started on the brief itself in its only terminal.
 import { expect, test } from '@playwright/test'
 import type { StatusJson } from '../../src/cli/workspaces'
 import type { TermInfo } from '../../src/shared/protocol'
@@ -106,10 +106,12 @@ test('a claude session in a workspace terminal reports needs input to que status
   })
 })
 
-test('a workspace described in a brief gets a random name, is titled with it, and starts claude on it', async () => {
+test('a workspace described in a brief gets a random name, a summarised title, and claude started on it', async () => {
   const repo = makeRepo()
   const queHome = newQueHome()
   const brief = 'Raise the upload timeout\n\nThe upload test times out on slow CI runners.'
+  // The fake claude's default answer to the background summary call.
+  const summary = 'Fake summary of the session'
   let project: Project
   let workspace: Workspace
   let name = ''
@@ -138,12 +140,12 @@ test('a workspace described in a brief gets a random name, is titled with it, an
     const created = queJson<Workspace[]>(queHome, 'ws', 'list', '--json').find(
       (w) => w.name === name
     )
-    expect(created).toMatchObject({ title: 'Raise the upload timeout', brief })
+    expect(created).toMatchObject({ brief })
     workspace = created as Workspace
   })
 
-  await test.step('The sidebar shows the title, and the brief on hover', async () => {
-    await expect(sidebar.workspaceName(workspace.id)).toHaveText('Raise the upload timeout')
+  await test.step('The sidebar title becomes the summary of the session, the brief on hover', async () => {
+    await expect(sidebar.workspaceName(workspace.id)).toHaveText(summary, { timeout: 15_000 })
     await expect(sidebar.workspaceOpen(workspace.id)).toHaveAttribute(
       'title',
       `${brief}\n${workspace.path}`

@@ -95,6 +95,9 @@ allow_bypass_permissions = false
 protected_branches = ["main", "master", "release"]
 start_prompt = ""                    # empty: Claude starts on the brief itself
 # instructions_file = "~/.config/que/instructions.md"   # unset: no instructions
+summaries = true                          # sidebar titles summarised in the background
+summary_model = "haiku"
+summary_interval_minutes = 5
 
 [quiet_hours]
 enabled = true

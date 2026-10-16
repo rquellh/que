@@ -77,7 +77,10 @@ export function defaultConfig(env: ConfigEnv): UserConfig {
     notifications: defaultNotifications(),
     jira: defaultJira(),
     // Empty: claude starts on the brief itself.
-    startPrompt: ''
+    startPrompt: '',
+    summaries: true,
+    summaryModel: 'haiku',
+    summaryIntervalMinutes: 5
   }
 }
 
@@ -346,6 +349,22 @@ export function parseConfig(text: string, env: ConfigEnv): ConfigResult<UserConf
     if (typeof startPrompt !== 'string') {
       errors.push({ key: 'start_prompt', message: 'must be a string' })
     } else config.startPrompt = startPrompt.trim() === '' ? '' : startPrompt
+  }
+  config.summaries = optionalBool(t, 'summaries', errors) ?? config.summaries
+  const summaryModel = t.summary_model
+  if (summaryModel !== undefined) {
+    if (typeof summaryModel !== 'string' || summaryModel.trim() === '') {
+      errors.push({ key: 'summary_model', message: 'must be a non-empty string' })
+    } else config.summaryModel = summaryModel.trim()
+  }
+  const interval = t.summary_interval_minutes
+  if (interval !== undefined) {
+    if (typeof interval !== 'number' || !Number.isInteger(interval) || interval < 1) {
+      errors.push({
+        key: 'summary_interval_minutes',
+        message: 'must be a whole number of at least 1'
+      })
+    } else config.summaryIntervalMinutes = interval
   }
 
   if (t.repos !== undefined) {

@@ -128,6 +128,11 @@ export class StatusService {
     this.states.delete(id)
   }
 
+  /** The transcript of the workspace's main session, from its last hook that named one. */
+  transcriptPath(id: string): string | undefined {
+    return this.states.get(id)?.transcriptPath
+  }
+
   private commit(id: string, prev: Tracked, next: Tracked): void {
     this.states.set(id, next)
     const statusChanged = prev.status !== next.status || prev.reason !== next.reason

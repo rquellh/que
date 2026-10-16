@@ -323,6 +323,17 @@ describe('fake claude', () => {
       const r = await run(CLAUDE, ['-p', 'hi', '--output-format', 'stream-json'])
       expect(r.code).toBe(1)
     }, 20_000)
+
+    it('answers a one-shot text question with QUE_FAKE_CLAUDE_SUMMARY and runs no session', async () => {
+      const r = await run(
+        CLAUDE,
+        ['-p', 'Label this session', '--output-format', 'text', '--settings', settings],
+        { QUE_FAKE_CLAUDE_SUMMARY: 'Retry logic for the uploader' }
+      )
+
+      expect(r).toEqual({ code: 0, stdout: 'Retry logic for the uploader\n', stderr: '' })
+      expect(fs.existsSync(hookLog)).toBe(false)
+    }, 20_000)
   })
 })
 

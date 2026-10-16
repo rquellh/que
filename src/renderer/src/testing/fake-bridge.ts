@@ -377,6 +377,7 @@ class FakeBridge {
           if (!project) throw notFound('project', projectId)
           const brief = p.brief?.trim() ? p.brief : undefined
           const title = p.title?.trim() || (brief ? titleOf(brief) : '')
+          const titleSource = p.title?.trim() ? 'user' : 'brief'
           const id = fakeId('ws_')
           const s = name !== undefined ? workspaceSlug(name) : randomWorkspaceName()
           if (!s) throw rpcError('bad_request', `invalid workspace name ${name ?? ''}`)
@@ -386,7 +387,7 @@ class FakeBridge {
           if (other) throw rpcError('conflict', `workspace ${s} already exists (${other.id})`)
           const now = new Date().toISOString()
           const ws: Workspace = {
-            ...(title ? { title } : {}),
+            ...(title ? { title, titleSource } : {}),
             ...(brief ? { brief } : {}),
             id,
             projectId,
@@ -518,7 +519,7 @@ class FakeBridge {
             throw rpcError('conflict', `branch ${ws.branch} is on origin; it keeps its name`)
           }
           const branch = wanted || ws.branch
-          const next = { ...ws, title: title.trim(), branch }
+          const next: Workspace = { ...ws, title: title.trim(), titleSource: 'user', branch }
           this.workspaces.set(id, next)
           this.emit('workspace.updated', { ...next })
           return { ...next }

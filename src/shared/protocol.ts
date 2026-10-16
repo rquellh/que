@@ -508,7 +508,7 @@ export interface Events {
   'term.created': { id: string }
   'term.killed': { id: string }
   'workspace.created': Workspace
-  /** Its pull request (prUrl), title, or branch changed. */
+  /** Its pull request (prUrl), title (a rename or a background summary), or branch changed. */
   'workspace.updated': Workspace
   'workspace.removed': { id: string }
   'workspace.status': WorkspaceStatusEvent

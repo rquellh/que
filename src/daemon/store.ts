@@ -11,6 +11,7 @@ import type {
   TaskSource,
   TaskState,
   Ticket,
+  TitleSource,
   Workspace,
   WorkspaceStatus
 } from '../shared/types'
@@ -122,7 +123,8 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE tickets ADD COLUMN assigned INTEGER NOT NULL DEFAULT 1;`,
   `ALTER TABLE tickets ADD COLUMN parent_checked_at TEXT;`,
   `ALTER TABLE workspaces ADD COLUMN title TEXT;
-   ALTER TABLE workspaces ADD COLUMN brief TEXT;`
+   ALTER TABLE workspaces ADD COLUMN brief TEXT;`,
+  `ALTER TABLE workspaces ADD COLUMN title_source TEXT;`
 ]
 
 const STATUS_LOG_RETENTION_MS = 30 * 24 * 3_600_000
@@ -219,6 +221,7 @@ interface WorkspaceRow {
   pr_json: string | null
   title: string | null
   brief: string | null
+  title_source: string | null
 }
 
 interface TaskRow {
@@ -358,7 +361,8 @@ function toWorkspace(r: WorkspaceRow): Workspace {
     prUrl: r.pr_url ?? null,
     pr: parsePr(r.pr_json),
     ...(r.title ? { title: r.title } : {}),
-    ...(r.brief ? { brief: r.brief } : {})
+    ...(r.brief ? { brief: r.brief } : {}),
+    ...(r.title_source ? { titleSource: r.title_source as TitleSource } : {})
   }
 }
 
@@ -458,8 +462,8 @@ export class Store {
       .prepare(
         `INSERT INTO workspaces (id, project_id, name, branch, path, base_ref, status, status_reason,
            status_at, last_activity_at, session_id, created_at, archived_at, pr_url, pr_json,
-           title, brief)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+           title, brief, title_source)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         w.id,
@@ -478,12 +482,15 @@ export class Store {
         w.prUrl,
         w.pr ? JSON.stringify(w.pr) : null,
         w.title ?? null,
-        w.brief ?? null
+        w.brief ?? null,
+        w.titleSource ?? null
       )
   }
 
-  setWorkspaceTitle(id: string, title: string): void {
-    this.db.prepare('UPDATE workspaces SET title = ? WHERE id = ?').run(title, id)
+  setWorkspaceTitle(id: string, title: string, source: TitleSource): void {
+    this.db
+      .prepare('UPDATE workspaces SET title = ?, title_source = ? WHERE id = ?')
+      .run(title, source, id)
   }
 
   setWorkspaceBranch(id: string, branch: string): void {
